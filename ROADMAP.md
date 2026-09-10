@@ -105,16 +105,23 @@ usage rc 64; child exit codes 0/1/42/127 pass through; window close and
 SIGTERM both tear down game, supervisor and compositor with no strays.
 
 ### Phase 1 — XWayland and the game on the virtual screen
-- [ ] wlr stack: headless backend + renderer/allocator; server globals
+- [x] wlr stack: headless backend + renderer/allocator; server globals
       (compositor, shm, seat, data-device-manager)
-- [ ] virtual output: headless output, default mode 1280x720, name "dynscope"
-- [ ] wlr_xwayland: start, wire DISPLAY env for the child
-- [ ] XWM surface tracking: focused top-level rendered fullscreen on the
+- [x] virtual output: headless output, default mode 1280x720, name "dynscope"
+- [x] wlr_xwayland: start, wire DISPLAY env for the child
+- [x] XWM surface tracking: focused top-level rendered fullscreen on the
       virtual output; override-redirect windows at their X positions
-- [ ] render pass: surface textures → window (1:1 for now), frame callbacks
-- [ ] keyboard focus: host kb enter/leave → seat focus → XWM focused window
+- [x] render pass: surface textures → window (1:1 for now), frame callbacks
+- [x] keyboard focus: host kb enter/leave → seat focus → XWM focused window
 Exit criteria: glxgears renders inside our window at 1:1, focused, no input
-behavior yet beyond not crashing.
+behavior yet beyond not crashing. Verified on Hyprland: glxgears visible in
+the dynscope window (user confirmed), stable over time, clean teardown, no
+strays. Key implementation results: frames are rendered GLES2-side into
+linear-modifier GBM dmabufs (Hyprland rejects AMD DCC-modified buffers
+cross-process) and presented via zwp_linux_dmabuf_v1 with a frame-callback
+paced 4-slot frame pool; wlroots emits `associate` with NULL data so the
+listener reads the surface from the tracked window. Subproject:
+wlroots 0.20.2 via meson wrap (Arch has no wlroots0.20 package).
 
 ### Phase 2 — Fit scaling, pointer, keyboard, cursor basics
 - [ ] host configure/resize → recompute fit (scale + offsets), re-render;

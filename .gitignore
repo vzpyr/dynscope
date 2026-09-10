@@ -1,1 +1,4 @@
 build/
+subprojects/wlroots/
+subprojects/libliftoff/
+subprojects/packagefiles/

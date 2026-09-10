@@ -44,7 +44,7 @@ static int supervisor_wait_for_game(pid_t game) {
 	return status;
 }
 
-static void supervisor_run(int pid_fd, int status_fd, char **argv) {
+static void supervisor_run(int pid_fd, int status_fd, char **argv, const char *display) {
 	struct sigaction sa = {0};
 	sa.sa_handler = supervisor_handle_signal;
 	sigaction(SIGINT, &sa, NULL);
@@ -66,6 +66,10 @@ static void supervisor_run(int pid_fd, int status_fd, char **argv) {
 			_exit(127);
 		setpgid(0, 0);
 		supervisor_reset_signals();
+		if (display != NULL)
+			setenv("DISPLAY", display, 1);
+		else
+			unsetenv("DISPLAY");
 		execvp(argv[0], argv);
 		_exit(127);
 	}
@@ -165,7 +169,7 @@ void child_terminate(struct dynscope *ds) {
 		kill(child->supervisor, SIGTERM);
 	}
 
-	child->kill_timer = wl_event_loop_add_timer(child->loop, child_kill_timer, ds);
+	child->kill_timer = wl_event_loop_add_timer(ds->loop, child_kill_timer, ds);
 	if (child->kill_timer != NULL)
 		wl_event_source_timer_update(child->kill_timer, KILL_GRACE_MS);
 }
@@ -198,7 +202,7 @@ int child_spawn(struct dynscope *ds, char **argv) {
 	if (supervisor == 0) {
 		close(pid_fds[0]);
 		close(status_fds[0]);
-		supervisor_run(pid_fds[1], status_fds[1], argv);
+		supervisor_run(pid_fds[1], status_fds[1], argv, ds->xwayland_display);
 		_exit(1);
 	}
 
@@ -207,8 +211,8 @@ int child_spawn(struct dynscope *ds, char **argv) {
 	child->supervisor = supervisor;
 	child->pid_fd = pid_fds[0];
 	child->status_fd = status_fds[0];
-	child->pid_src = wl_event_loop_add_fd(child->loop, child->pid_fd, WL_EVENT_READABLE, child_pid_event, ds);
-	child->status_src = wl_event_loop_add_fd(child->loop, child->status_fd, WL_EVENT_READABLE, child_status_event, ds);
+	child->pid_src = wl_event_loop_add_fd(ds->loop, child->pid_fd, WL_EVENT_READABLE, child_pid_event, ds);
+	child->status_src = wl_event_loop_add_fd(ds->loop, child->status_fd, WL_EVENT_READABLE, child_status_event, ds);
 	child->spawned = true;
 	return 0;
 }

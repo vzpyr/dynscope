@@ -7,6 +7,7 @@
 #include "child.h"
 #include "dynscope.h"
 #include "host.h"
+#include "server.h"
 
 static int handle_signal(int signal_number, void *data) {
 	(void)signal_number;
@@ -35,15 +36,13 @@ int main(int argc, char **argv) {
 		.running = true,
 	};
 
-	ds.loop = wl_event_loop_create();
-	if (ds.loop == NULL) {
-		fprintf(stderr, "dynscope: failed to create event loop\n");
+	if (server_init(&ds) < 0)
 		return 1;
-	}
-	ds.child.loop = ds.loop;
+
+	ds.xwayland_display = server_display_name(&ds);
 
 	if (host_open(&ds) < 0) {
-		wl_event_loop_destroy(ds.loop);
+		server_finish(&ds);
 		return 1;
 	}
 
@@ -53,16 +52,17 @@ int main(int argc, char **argv) {
 	if (child_spawn(&ds, &argv[2]) < 0) {
 		fprintf(stderr, "dynscope: failed to spawn child process\n");
 		host_close(&ds);
-		wl_event_loop_destroy(ds.loop);
+		server_finish(&ds);
 		return 1;
 	}
 
 	while (ds.running) {
 		wl_event_loop_dispatch(ds.loop, -1);
+		wl_display_flush_clients(ds.server->display);
 		host_flush(&ds);
 	}
 
 	host_close(&ds);
-	wl_event_loop_destroy(ds.loop);
+	server_finish(&ds);
 	return ds.exit_code;
 }

@@ -2,11 +2,11 @@
 #define DYNSCOPE_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <sys/types.h>
 #include <wayland-server-core.h>
 
 struct child {
-	struct wl_event_loop *loop;
 	pid_t supervisor;
 	pid_t game;
 	int pid_fd;
@@ -19,10 +19,26 @@ struct child {
 	bool finished;
 };
 
+struct host;
+struct server;
+
+struct frame_info {
+	int generation;
+	int fd;
+	uint32_t format;
+	int32_t width;
+	int32_t height;
+	int32_t offset;
+	int32_t stride;
+	uint64_t modifier;
+};
+
 struct dynscope {
 	struct wl_event_loop *loop;
 	struct child child;
 	struct host *host;
+	struct server *server;
+	const char *xwayland_display;
 	bool running;
 	bool closing;
 	int exit_code;

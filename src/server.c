@@ -1,0 +1,372 @@
+#include <EGL/egl.h>
+#include <GLES2/gl2.h>
+#include <drm_fourcc.h>
+#include <fcntl.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <xkbcommon/xkbcommon.h>
+
+#include <wlr/backend/headless.h>
+#include <wlr/render/allocator.h>
+#include <wlr/render/drm_format_set.h>
+#include <wlr/render/gles2.h>
+#include <wlr/render/wlr_renderer.h>
+#include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_data_device.h>
+#include <wlr/types/wlr_output.h>
+#include <wlr/types/wlr_seat.h>
+#include <wlr/types/wlr_subcompositor.h>
+#include <wlr/interfaces/wlr_keyboard.h>
+#include <wlr/util/log.h>
+#include <wlr/xwayland/xwayland.h>
+
+#include "dynscope.h"
+#include "server.h"
+#include "xwm.h"
+
+#define DEFAULT_WIDTH 1280
+#define DEFAULT_HEIGHT 720
+
+struct wlr_egl_context {
+	EGLDisplay display;
+	EGLContext context;
+	EGLSurface draw_surface;
+	EGLSurface read_surface;
+};
+
+bool wlr_egl_make_current(struct wlr_egl *egl, struct wlr_egl_context *save_context);
+bool wlr_egl_restore_context(struct wlr_egl_context *context);
+
+static const struct wlr_keyboard_impl keyboard_impl = {
+	.name = "dynscope",
+};
+
+static int frame_alloc(struct server *s, int width, int height, struct frame *out) {
+	uint64_t modifiers[1] = {DRM_FORMAT_MOD_LINEAR};
+	struct wlr_drm_format format = {
+		.format = DRM_FORMAT_XRGB8888,
+		.len = 1,
+		.modifiers = modifiers,
+	};
+
+	struct wlr_buffer *buffer = wlr_allocator_create_buffer(s->allocator, width, height, &format);
+	if (buffer == NULL) {
+		return -1;
+	}
+
+	struct wlr_dmabuf_attributes attrs;
+	if (!wlr_buffer_get_dmabuf(buffer, &attrs)) {
+		wlr_buffer_drop(buffer);
+		return -1;
+	}
+
+	out->buffer = buffer;
+	out->attrs = attrs;
+	out->generation = 0;
+	out->in_flight = false;
+	return 0;
+}
+
+static void frame_destroy(struct server *s, struct frame *frame) {
+	(void)s;
+	wlr_buffer_drop(frame->buffer);
+	frame->buffer = NULL;
+}
+
+static void frame_pool_resize(struct server *s, int width, int height) {
+	for (int i = 0; i < s->pool.nframes; i++)
+		frame_destroy(s, &s->pool.frames[i]);
+	s->pool.nframes = 0;
+	s->pool.width = width;
+	s->pool.height = height;
+}
+
+static struct frame *frame_pick(struct server *s, int width, int height) {
+	for (int i = 0; i < s->pool.nframes; i++) {
+		if (!s->pool.frames[i].in_flight)
+			return &s->pool.frames[i];
+	}
+
+	if (s->pool.nframes < FRAME_POOL_MAX) {
+		struct frame *frame = &s->pool.frames[s->pool.nframes];
+		if (frame_alloc(s, width, height, frame) == 0) {
+			s->pool.nframes++;
+			return frame;
+		}
+	}
+
+	struct frame *oldest = &s->pool.frames[0];
+	for (int i = 1; i < s->pool.nframes; i++) {
+		if (s->pool.frames[i].generation < oldest->generation)
+			oldest = &s->pool.frames[i];
+	}
+	return oldest;
+}
+
+static void server_gpu_sync(struct server *s) {
+	struct wlr_egl_context prev;
+	if (!wlr_egl_make_current(s->egl, &prev))
+		return;
+	glFinish();
+	wlr_egl_restore_context(&prev);
+}
+
+void server_present(struct dynscope *ds, int width, int height, struct frame_info *out) {
+	struct server *s = ds->server;
+	memset(out, 0, sizeof(*out));
+	out->fd = -1;
+	if (width <= 0 || height <= 0 || s == NULL)
+		return;
+
+	if (s->pool.width != width || s->pool.height != height)
+		frame_pool_resize(s, width, height);
+
+	struct frame *frame = frame_pick(s, width, height);
+	if (frame->buffer == NULL || frame->attrs.n_planes < 1)
+		return;
+
+	struct wlr_render_pass *pass = wlr_renderer_begin_buffer_pass(s->renderer, frame->buffer, NULL);
+	if (pass == NULL)
+		return;
+
+	struct wlr_render_rect_options background = {
+		.box = {0, 0, width, height},
+		.color = {0.0f, 0.0f, 0.0f, 1.0f},
+	};
+	wlr_render_pass_add_rect(pass, &background);
+
+	xwm_draw(s, pass, width, height);
+
+	if (!wlr_render_pass_submit(pass))
+		return;
+
+	server_gpu_sync(s);
+
+	frame->in_flight = true;
+	frame->generation = ++s->pool.next_generation;
+
+	out->generation = frame->generation;
+	out->fd = fcntl(frame->attrs.fd[0], F_DUPFD_CLOEXEC, 0);
+	out->format = frame->attrs.format;
+	out->width = width;
+	out->height = height;
+	out->offset = frame->attrs.offset[0];
+	out->stride = frame->attrs.stride[0];
+	out->modifier = frame->attrs.modifier;
+}
+
+void server_frame_released(struct dynscope *ds, int generation) {
+	struct server *s = ds->server;
+	if (s == NULL)
+		return;
+	for (int i = 0; i < s->pool.nframes; i++) {
+		if (s->pool.frames[i].generation == generation) {
+			s->pool.frames[i].in_flight = false;
+			return;
+		}
+	}
+}
+
+void server_keyboard_keymap(struct dynscope *ds, const char *keymap_string) {
+	struct server *s = ds->server;
+	if (s == NULL || s->xkb_context == NULL)
+		return;
+
+	struct xkb_keymap *keymap = xkb_keymap_new_from_string(s->xkb_context, keymap_string, XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
+	if (keymap == NULL)
+		return;
+
+	wlr_keyboard_set_keymap(&s->keyboard, keymap);
+	xkb_keymap_unref(keymap);
+}
+
+void server_keyboard_key(struct dynscope *ds, uint32_t key, bool pressed) {
+	struct server *s = ds->server;
+	if (s == NULL)
+		return;
+
+	struct wlr_keyboard_key_event event = {
+		.keycode = key,
+		.update_state = true,
+		.state = pressed ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED,
+	};
+	wlr_keyboard_notify_key(&s->keyboard, &event);
+}
+
+void server_keyboard_modifiers(struct dynscope *ds, uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group) {
+	struct server *s = ds->server;
+	if (s == NULL)
+		return;
+	wlr_keyboard_notify_modifiers(&s->keyboard, depressed, latched, locked, group);
+}
+
+const char *server_display_name(struct dynscope *ds) {
+	struct server *s = ds->server;
+	return s != NULL && s->xwayland != NULL ? s->xwayland->display_name : NULL;
+}
+
+static void handle_xwayland_ready(struct wl_listener *listener, void *data) {
+	(void)listener;
+	(void)data;
+}
+
+static void handle_xwayland_destroy(struct wl_listener *listener, void *data) {
+	(void)listener;
+	(void)data;
+	struct server *s = wl_container_of(listener, s, xwayland_destroy);
+	fprintf(stderr, "dynscope: Xwayland exited\n");
+	dynscope_close(s->ds);
+}
+
+int server_init(struct dynscope *ds) {
+	struct server *s = calloc(1, sizeof(*s));
+	if (s == NULL) {
+		fprintf(stderr, "dynscope: out of memory\n");
+		return -1;
+	}
+	s->ds = ds;
+	ds->server = s;
+
+	enum wlr_log_importance log_importance = WLR_ERROR;
+	if (getenv("DYNSCOPE_DEBUG") != NULL)
+		log_importance = WLR_DEBUG;
+	wlr_log_init(log_importance, NULL);
+
+	s->display = wl_display_create();
+	if (s->display == NULL) {
+		fprintf(stderr, "dynscope: failed to create Wayland display\n");
+		goto fail;
+	}
+	ds->loop = wl_display_get_event_loop(s->display);
+
+	s->xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+	if (s->xkb_context == NULL) {
+		fprintf(stderr, "dynscope: failed to create xkb context\n");
+		goto fail;
+	}
+	struct xkb_keymap *keymap = xkb_keymap_new_from_names(s->xkb_context, NULL, XKB_KEYMAP_COMPILE_NO_FLAGS);
+	if (keymap == NULL) {
+		fprintf(stderr, "dynscope: failed to create default keymap\n");
+		goto fail;
+	}
+	wlr_keyboard_init(&s->keyboard, &keyboard_impl, "dynscope");
+	if (!wlr_keyboard_set_keymap(&s->keyboard, keymap)) {
+		fprintf(stderr, "dynscope: failed to set default keymap\n");
+		xkb_keymap_unref(keymap);
+		goto fail;
+	}
+	xkb_keymap_unref(keymap);
+
+	s->backend = wlr_headless_backend_create(ds->loop);
+	if (s->backend == NULL) {
+		fprintf(stderr, "dynscope: failed to create headless backend\n");
+		goto fail;
+	}
+
+	s->renderer = wlr_renderer_autocreate(s->backend);
+	if (s->renderer == NULL) {
+		fprintf(stderr, "dynscope: failed to create renderer\n");
+		goto fail;
+	}
+	if (!wlr_renderer_is_gles2(s->renderer)) {
+		fprintf(stderr, "dynscope: GPU renderer (GLES2) is required, falling back to software is not supported\n");
+		goto fail;
+	}
+	s->egl = wlr_gles2_renderer_get_egl(s->renderer);
+
+	if (!wlr_backend_start(s->backend)) {
+		fprintf(stderr, "dynscope: failed to start backend\n");
+		goto fail;
+	}
+
+	s->allocator = wlr_allocator_autocreate(s->backend, s->renderer);
+	if (s->allocator == NULL) {
+		fprintf(stderr, "dynscope: failed to create allocator\n");
+		goto fail;
+	}
+
+	if (!wlr_renderer_init_wl_display(s->renderer, s->display)) {
+		fprintf(stderr, "dynscope: failed to initialize buffer protocols\n");
+		goto fail;
+	}
+
+	s->compositor = wlr_compositor_create(s->display, 6, s->renderer);
+	if (s->compositor == NULL) {
+		fprintf(stderr, "dynscope: failed to create compositor\n");
+		goto fail;
+	}
+	s->subcompositor = wlr_subcompositor_create(s->display);
+
+	s->seat = wlr_seat_create(s->display, "seat0");
+	if (s->seat == NULL) {
+		fprintf(stderr, "dynscope: failed to create seat\n");
+		goto fail;
+	}
+	wlr_seat_set_keyboard(s->seat, &s->keyboard);
+
+	s->data_device = wlr_data_device_manager_create(s->display);
+
+	s->output = wlr_headless_add_output(s->backend, DEFAULT_WIDTH, DEFAULT_HEIGHT);
+	if (s->output == NULL) {
+		fprintf(stderr, "dynscope: failed to create virtual output\n");
+		goto fail;
+	}
+	wlr_output_set_name(s->output, "dynscope");
+	struct wlr_output_state output_state;
+	wlr_output_state_init(&output_state);
+	wlr_output_state_set_enabled(&output_state, true);
+	wlr_output_state_set_custom_mode(&output_state, DEFAULT_WIDTH, DEFAULT_HEIGHT, 0);
+	if (!wlr_output_commit_state(s->output, &output_state)) {
+		wlr_output_state_finish(&output_state);
+		fprintf(stderr, "dynscope: failed to commit virtual output\n");
+		goto fail;
+	}
+	wlr_output_state_finish(&output_state);
+
+	s->xwayland = wlr_xwayland_create(s->display, s->compositor, false);
+	if (s->xwayland == NULL) {
+		fprintf(stderr, "dynscope: failed to start Xwayland\n");
+		goto fail;
+	}
+	s->xwayland_destroy.notify = handle_xwayland_destroy;
+	wl_signal_add(&s->xwayland->events.destroy, &s->xwayland_destroy);
+	s->xwayland_ready.notify = handle_xwayland_ready;
+	wl_signal_add(&s->xwayland->events.ready, &s->xwayland_ready);
+	wlr_xwayland_set_seat(s->xwayland, s->seat);
+
+	if (xwm_init(s) < 0)
+		goto fail;
+
+	return 0;
+
+fail:
+	server_finish(ds);
+	return -1;
+}
+
+void server_finish(struct dynscope *ds) {
+	struct server *s = ds->server;
+	if (s == NULL)
+		return;
+	ds->server = NULL;
+
+	xwm_finish(s);
+	if (s->xwayland != NULL) {
+		wl_list_remove(&s->xwayland_destroy.link);
+		wl_list_remove(&s->xwayland_ready.link);
+		wlr_xwayland_destroy(s->xwayland);
+	}
+	wlr_keyboard_finish(&s->keyboard);
+	if (s->xkb_context != NULL)
+		xkb_context_unref(s->xkb_context);
+	if (s->backend != NULL)
+		wlr_backend_destroy(s->backend);
+	if (s->display != NULL) {
+		wl_display_destroy_clients(s->display);
+		wl_display_destroy(s->display);
+	}
+	free(s);
+}
