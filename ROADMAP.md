@@ -90,16 +90,19 @@ References: gamescope @ 50c8d74 (`~/Code/refs/gamescope`), wlroots 0.21-dev
 ## Phases
 
 ### Phase 0 — Skeleton and child lifecycle
-- [ ] meson/ninja project `dynscope`, C99, deps via pkg-config, zero warnings
-- [ ] argv: only `dynscope -- CMD...` accepted; fork/exec CMD with DISPLAY
-      pointing at our Xwayland; waitpid; exit with child's exit code
-- [ ] parent window: connect host compositor, xdg_toplevel + xdg_surface,
+- [x] meson/ninja project `dynscope`, C99, deps via pkg-config, zero warnings
+- [x] argv: only `dynscope -- CMD...` accepted; fork/exec CMD with DISPLAY
+      pointing at our Xwayland (mechanism done; Xwayland + real DISPLAY value
+      arrive in phase 1); waitpid via supervisor; exit with child's exit code
+- [x] parent window: connect host compositor, xdg_toplevel + xdg_surface,
       black frame, frame-callback driven, clean close handling
-- [ ] shutdown both ways: window close → SIGTERM child (2 s grace → SIGKILL);
+- [x] shutdown both ways: window close → SIGTERM child (2 s grace → SIGKILL);
       child exit → compositor exits
-- [ ] README with usage
+- [x] README with usage
 Exit criteria: `dynscope -- glxgears` opens the window and the child, and
-closing either side tears everything down cleanly.
+closing either side tears everything down cleanly. Verified on Hyprland:
+usage rc 64; child exit codes 0/1/42/127 pass through; window close and
+SIGTERM both tear down game, supervisor and compositor with no strays.
 
 ### Phase 1 — XWayland and the game on the virtual screen
 - [ ] wlr stack: headless backend + renderer/allocator; server globals
