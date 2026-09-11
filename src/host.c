@@ -14,6 +14,7 @@
 #include "server.h"
 #include "xdg-shell-client-protocol.h"
 #include "linux-dmabuf-v1-client-protocol.h"
+#include "cursor-shape-v1-client-protocol.h"
 
 #define DEFAULT_WIDTH 1280
 #define DEFAULT_HEIGHT 720
@@ -24,19 +25,47 @@ struct outstanding {
 	struct wl_buffer *buffer;
 };
 
+struct host_cursor {
+	uint32_t *pixels;
+	int width;
+	int height;
+	int hotspot_x;
+	int hotspot_y;
+	enum { CURSOR_DEFAULT, CURSOR_PIXELS, CURSOR_HIDDEN } mode;
+};
+
+struct pending_axis {
+	double value;
+	int32_t discrete;
+	bool have;
+	uint32_t source;
+	uint32_t time;
+	uint32_t axis;
+};
+
 struct host {
 	struct wl_display *display;
 	struct wl_registry *registry;
 	struct wl_compositor *compositor;
+	struct wl_shm *shm;
 	struct wl_seat *seat;
+	struct wl_pointer *pointer;
+	struct wp_cursor_shape_manager_v1 *cursor_shape_manager;
+	struct wp_cursor_shape_device_v1 *cursor_shape_device;
 	struct zwp_linux_dmabuf_v1 *dmabuf;
 	struct xdg_wm_base *wm_base;
 	struct wl_surface *surface;
 	struct xdg_surface *xdg_surface;
 	struct xdg_toplevel *toplevel;
+	struct wl_surface *cursor_surface;
+	struct wl_shm_pool *cursor_pool;
+	struct wl_buffer *cursor_buffer;
 
 	struct wl_keyboard *keyboard;
 	struct wl_array outstanding;
+	struct host_cursor cursor;
+	struct pending_axis pending_axis;
+	uint32_t pointer_enter_serial;
 
 	struct wl_event_source *fd_src;
 	struct wl_event_source *flush_src;
@@ -58,13 +87,20 @@ static const struct xdg_surface_listener xdg_surface_listener;
 static const struct wl_callback_listener frame_listener;
 static const struct wl_seat_listener seat_listener;
 static const struct wl_keyboard_listener keyboard_listener;
+static const struct wl_pointer_listener pointer_listener;
 static const struct wl_buffer_listener buffer_listener;
+
+static void host_apply_cursor_impl(struct host *host);
 
 static void registry_handle_global(void *data, struct wl_registry *registry, uint32_t name, const char *interface, uint32_t version) {
 	struct host *host = data;
 
 	if (strcmp(interface, wl_compositor_interface.name) == 0)
 		host->compositor = wl_registry_bind(registry, name, &wl_compositor_interface, version < (uint32_t)wl_compositor_interface.version ? version : (uint32_t)wl_compositor_interface.version);
+	else if (strcmp(interface, wl_shm_interface.name) == 0)
+		host->shm = wl_registry_bind(registry, name, &wl_shm_interface, version < 1u ? version : 1u);
+	else if (strcmp(interface, wp_cursor_shape_manager_v1_interface.name) == 0)
+		host->cursor_shape_manager = wl_registry_bind(registry, name, &wp_cursor_shape_manager_v1_interface, version < 1u ? version : 1u);
 	else if (strcmp(interface, wl_seat_interface.name) == 0)
 		host->seat = wl_registry_bind(registry, name, &wl_seat_interface, version < 8u ? version : 8u);
 	else if (strcmp(interface, xdg_wm_base_interface.name) == 0)
@@ -214,6 +250,9 @@ static void xdg_surface_handle_configure(void *data, struct xdg_surface *xdg_sur
 	struct host *host = data;
 	xdg_surface_ack_configure(xdg_surface, serial);
 
+	if (getenv("DYNSCOPE_DEBUG") != NULL)
+		fprintf(stderr, "dynscope: host configure pending=%dx%d\n", host->pending_width, host->pending_height);
+
 	if (!host->configured) {
 		host->configured = true;
 		host->width = host->pending_width > 0 ? host->pending_width : DEFAULT_WIDTH;
@@ -241,6 +280,16 @@ static void seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t 
 	} else if ((capabilities & WL_SEAT_CAPABILITY_KEYBOARD) == 0 && host->keyboard != NULL) {
 		wl_keyboard_release(host->keyboard);
 		host->keyboard = NULL;
+	}
+
+	if ((capabilities & WL_SEAT_CAPABILITY_POINTER) != 0 && host->pointer == NULL) {
+		host->pointer = wl_seat_get_pointer(seat);
+		wl_pointer_add_listener(host->pointer, &pointer_listener, host);
+		if (host->cursor_shape_manager != NULL)
+			host->cursor_shape_device = wp_cursor_shape_manager_v1_get_pointer(host->cursor_shape_manager, host->pointer);
+	} else if ((capabilities & WL_SEAT_CAPABILITY_POINTER) == 0 && host->pointer != NULL) {
+		wl_pointer_release(host->pointer);
+		host->pointer = NULL;
 	}
 }
 
@@ -328,6 +377,246 @@ static const struct wl_keyboard_listener keyboard_listener = {
 	.repeat_info = keyboard_handle_repeat_info,
 };
 
+static void pointer_handle_enter(void *data, struct wl_pointer *pointer, uint32_t serial, struct wl_surface *surface, wl_fixed_t sx, wl_fixed_t sy) {
+	struct host *host = data;
+	(void)pointer;
+	(void)surface;
+	host->pointer_enter_serial = serial;
+	double x = wl_fixed_to_double(sx);
+	double y = wl_fixed_to_double(sy);
+	server_pointer_enter(host->ds, x, y);
+}
+
+static void pointer_handle_leave(void *data, struct wl_pointer *pointer, uint32_t serial, struct wl_surface *surface) {
+	struct host *host = data;
+	(void)pointer;
+	(void)serial;
+	(void)surface;
+	if (getenv("DYNSCOPE_DEBUG") != NULL)
+		fprintf(stderr, "dynscope: host pointer leave\n");
+	server_pointer_leave(host->ds);
+}
+
+static void pointer_handle_motion(void *data, struct wl_pointer *pointer, uint32_t time, wl_fixed_t sx, wl_fixed_t sy) {
+	struct host *host = data;
+	(void)pointer;
+	double x = wl_fixed_to_double(sx);
+	double y = wl_fixed_to_double(sy);
+	server_pointer_motion(host->ds, time, x, y);
+}
+
+static void pointer_handle_button(void *data, struct wl_pointer *pointer, uint32_t serial, uint32_t time, uint32_t button, uint32_t state) {
+	struct host *host = data;
+	(void)pointer;
+	(void)serial;
+	if (getenv("DYNSCOPE_DEBUG") != NULL)
+		fprintf(stderr, "dynscope: host button %u state=%u\n", button, state);
+	server_pointer_button(host->ds, time, button, state);
+}
+
+static void pointer_handle_axis(void *data, struct wl_pointer *pointer, uint32_t time, uint32_t axis, wl_fixed_t value) {
+	struct host *host = data;
+	(void)pointer;
+	if (axis > 1)
+		return;
+	host->pending_axis.value = wl_fixed_to_double(value);
+	host->pending_axis.have = true;
+	host->pending_axis.time = time;
+	host->pending_axis.axis = axis;
+}
+
+static void pointer_handle_frame(void *data, struct wl_pointer *pointer) {
+	struct host *host = data;
+	(void)pointer;
+	if (host->pending_axis.have) {
+		server_pointer_axis(host->ds, host->pending_axis.time, host->pending_axis.axis, host->pending_axis.value, host->pending_axis.discrete, host->pending_axis.source);
+		host->pending_axis.have = false;
+		host->pending_axis.discrete = 0;
+	}
+}
+
+static void pointer_handle_axis_source(void *data, struct wl_pointer *pointer, uint32_t axis_source) {
+	struct host *host = data;
+	(void)pointer;
+	host->pending_axis.source = axis_source;
+}
+
+static void pointer_handle_axis_stop(void *data, struct wl_pointer *pointer, uint32_t time, uint32_t axis) {
+	(void)data;
+	(void)pointer;
+	(void)time;
+	(void)axis;
+}
+
+static void pointer_handle_axis_discrete(void *data, struct wl_pointer *pointer, uint32_t axis, int32_t discrete) {
+	struct host *host = data;
+	(void)pointer;
+	(void)axis;
+	host->pending_axis.discrete += discrete;
+}
+
+static void pointer_handle_axis_value120(void *data, struct wl_pointer *pointer, uint32_t axis, int32_t value120) {
+	struct host *host = data;
+	(void)pointer;
+	(void)axis;
+	host->pending_axis.discrete += value120 / 120;
+}
+
+static const struct wl_pointer_listener pointer_listener = {
+	.enter = pointer_handle_enter,
+	.leave = pointer_handle_leave,
+	.motion = pointer_handle_motion,
+	.button = pointer_handle_button,
+	.axis = pointer_handle_axis,
+	.frame = pointer_handle_frame,
+	.axis_source = pointer_handle_axis_source,
+	.axis_stop = pointer_handle_axis_stop,
+	.axis_discrete = pointer_handle_axis_discrete,
+	.axis_value120 = pointer_handle_axis_value120,
+};
+
+static void host_cursor_clear_buffer(struct host_cursor *cursor) {
+	free(cursor->pixels);
+	cursor->pixels = NULL;
+	cursor->width = 0;
+	cursor->height = 0;
+}
+
+static void host_apply_cursor_impl(struct host *host) {
+	struct host_cursor *cursor = &host->cursor;
+	if (host->pointer == NULL || host->surface == NULL) {
+		if (getenv("DYNSCOPE_DEBUG") != NULL)
+			fprintf(stderr, "dynscope: apply cursor skipped pointer=%p surface=%p\n", (void *)host->pointer, (void *)host->surface);
+		return;
+	}
+
+	if (getenv("DYNSCOPE_DEBUG") != NULL)
+		fprintf(stderr, "dynscope: apply cursor mode=%d serial=%u\n", cursor->mode, host->pointer_enter_serial);
+
+	wl_display_dispatch_pending(host->display);
+	wl_display_flush(host->display);
+
+	if (cursor->mode == CURSOR_HIDDEN) {
+		wl_pointer_set_cursor(host->pointer, host->pointer_enter_serial, NULL, 0, 0);
+		return;
+	}
+	if (cursor->mode == CURSOR_DEFAULT) {
+		if (host->cursor_shape_device != NULL)
+			wp_cursor_shape_device_v1_set_shape(host->cursor_shape_device, host->pointer_enter_serial, WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT);
+		else
+			wl_pointer_set_cursor(host->pointer, host->pointer_enter_serial, NULL, 0, 0);
+		return;
+	}
+	if (cursor->pixels == NULL || host->shm == NULL)
+		return;
+
+	size_t size = (size_t)cursor->width * (size_t)cursor->height * 4;
+	int fd = memfd_create("dynscope-cursor", MFD_CLOEXEC);
+	if (fd < 0)
+		return;
+	if (ftruncate(fd, (off_t)size) < 0) {
+		close(fd);
+		return;
+	}
+	void *data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (data == MAP_FAILED) {
+		close(fd);
+		return;
+	}
+	memcpy(data, cursor->pixels, size);
+	munmap(data, size);
+
+	if (host->cursor_buffer != NULL) {
+		wl_buffer_destroy(host->cursor_buffer);
+		host->cursor_buffer = NULL;
+	}
+	if (host->cursor_pool != NULL) {
+		wl_shm_pool_destroy(host->cursor_pool);
+		host->cursor_pool = NULL;
+	}
+
+	struct wl_shm_pool *pool = wl_shm_create_pool(host->shm, fd, (int32_t)size);
+	close(fd);
+	if (pool == NULL)
+		return;
+	struct wl_buffer *buffer = wl_shm_pool_create_buffer(pool, 0, cursor->width, cursor->height, cursor->width * 4, WL_SHM_FORMAT_ARGB8888);
+	host->cursor_pool = pool;
+	if (buffer == NULL)
+		return;
+
+	if (host->cursor_surface == NULL) {
+		host->cursor_surface = wl_compositor_create_surface(host->compositor);
+		if (host->cursor_surface == NULL) {
+			wl_buffer_destroy(buffer);
+			return;
+		}
+	}
+	wl_surface_attach(host->cursor_surface, buffer, 0, 0);
+	wl_surface_damage(host->cursor_surface, 0, 0, INT32_MAX, INT32_MAX);
+	wl_surface_commit(host->cursor_surface);
+	host->cursor_buffer = buffer;
+
+	wl_pointer_set_cursor(host->pointer, host->pointer_enter_serial, host->cursor_surface, cursor->hotspot_x, cursor->hotspot_y);
+}
+
+static void host_frame_idle(void *data) {
+	struct host *host = data;
+	host_present(host);
+}
+
+void host_request_frame(struct dynscope *ds) {
+	if (ds->host == NULL || ds->host->width <= 0)
+		return;
+	wl_event_loop_add_idle(ds->loop, host_frame_idle, ds->host);
+}
+
+void host_set_cursor_hidden(struct dynscope *ds) {
+	if (ds->host == NULL)
+		return;
+	host_cursor_clear_buffer(&ds->host->cursor);
+	ds->host->cursor.mode = CURSOR_HIDDEN;
+	host_apply_cursor_impl(ds->host);
+}
+
+void host_apply_cursor(struct dynscope *ds) {
+	if (ds->host != NULL)
+		host_apply_cursor_impl(ds->host);
+}
+
+void host_set_title(struct dynscope *ds, const char *title) {
+	struct host *host = ds->host;
+	if (host == NULL || host->toplevel == NULL)
+		return;
+	xdg_toplevel_set_title(host->toplevel, title);
+}
+
+
+
+void host_set_cursor(struct dynscope *ds, const void *pixels, int width, int height, int hotspot_x, int hotspot_y) {
+	struct host *host = ds->host;
+	if (host == NULL)
+		return;
+
+	struct host_cursor *cursor = &host->cursor;
+	if (pixels == NULL || width <= 0 || height <= 0) {
+		host_cursor_clear_buffer(cursor);
+		cursor->mode = CURSOR_DEFAULT;
+	} else {
+		uint32_t *copy = malloc((size_t)width * (size_t)height * 4);
+		if (copy == NULL)
+			return;
+		memcpy(copy, pixels, (size_t)width * (size_t)height * 4);
+		host_cursor_clear_buffer(cursor);
+		cursor->pixels = copy;
+		cursor->width = width;
+		cursor->height = height;
+		cursor->hotspot_x = hotspot_x;
+		cursor->hotspot_y = hotspot_y;
+		cursor->mode = CURSOR_PIXELS;
+	}
+	host_apply_cursor_impl(host);
+}
+
 static int host_fd_event(int fd, uint32_t mask, void *data) {
 	(void)fd;
 	struct host *host = data;
@@ -392,8 +681,8 @@ int host_open(struct dynscope *ds) {
 	wl_registry_add_listener(host->registry, &registry_listener, host);
 	wl_display_roundtrip(host->display);
 
-	if (host->compositor == NULL || host->wm_base == NULL || host->seat == NULL || host->dmabuf == NULL) {
-		fprintf(stderr, "dynscope: host compositor is missing required Wayland globals (compositor, seat, xdg_wm_base, linux-dmabuf)\n");
+	if (host->compositor == NULL || host->wm_base == NULL || host->seat == NULL || host->dmabuf == NULL || host->shm == NULL) {
+		fprintf(stderr, "dynscope: host compositor is missing required Wayland globals (compositor, shm, seat, xdg_wm_base, linux-dmabuf)\n");
 		goto fail;
 	}
 
@@ -442,6 +731,18 @@ void host_close(struct dynscope *ds) {
 		wl_event_source_remove(host->flush_src);
 	if (host->keyboard != NULL)
 		wl_keyboard_destroy(host->keyboard);
+	if (host->pointer != NULL)
+		wl_pointer_destroy(host->pointer);
+	if (host->cursor_shape_device != NULL)
+		wp_cursor_shape_device_v1_destroy(host->cursor_shape_device);
+	if (host->cursor_shape_manager != NULL)
+		wp_cursor_shape_manager_v1_destroy(host->cursor_shape_manager);
+	if (host->cursor_buffer != NULL)
+		wl_buffer_destroy(host->cursor_buffer);
+	if (host->cursor_pool != NULL)
+		wl_shm_pool_destroy(host->cursor_pool);
+	if (host->cursor_surface != NULL)
+		wl_surface_destroy(host->cursor_surface);
 	if (host->toplevel != NULL)
 		xdg_toplevel_destroy(host->toplevel);
 	if (host->xdg_surface != NULL)
@@ -452,6 +753,8 @@ void host_close(struct dynscope *ds) {
 		xdg_wm_base_destroy(host->wm_base);
 	if (host->dmabuf != NULL)
 		zwp_linux_dmabuf_v1_destroy(host->dmabuf);
+	if (host->shm != NULL)
+		wl_shm_destroy(host->shm);
 	if (host->seat != NULL)
 		wl_seat_destroy(host->seat);
 	if (host->compositor != NULL)
@@ -460,5 +763,6 @@ void host_close(struct dynscope *ds) {
 		wl_registry_destroy(host->registry);
 	if (host->display != NULL)
 		wl_display_disconnect(host->display);
+	host_cursor_clear_buffer(&host->cursor);
 	free(host);
 }

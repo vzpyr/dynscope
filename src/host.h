@@ -7,4 +7,10 @@ int host_open(struct dynscope *ds);
 void host_close(struct dynscope *ds);
 void host_flush(struct dynscope *ds);
 
+void host_set_title(struct dynscope *ds, const char *title);
+void host_request_frame(struct dynscope *ds);
+void host_set_cursor(struct dynscope *ds, const void *pixels, int width, int height, int hotspot_x, int hotspot_y);
+void host_apply_cursor(struct dynscope *ds);
+void host_set_cursor_hidden(struct dynscope *ds);
+
 #endif

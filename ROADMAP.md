@@ -124,18 +124,29 @@ listener reads the surface from the tracked window. Subproject:
 wlroots 0.20.2 via meson wrap (Arch has no wlroots0.20 package).
 
 ### Phase 2 — Fit scaling, pointer, keyboard, cursor basics
-- [ ] host configure/resize → recompute fit (scale + offsets), re-render;
+- [x] host configure/resize → recompute fit (scale + offsets), re-render;
       window title from game
-- [ ] pointer enter/motion/leave: host coords → virtual coords →
+- [x] pointer enter/motion/leave: host coords → virtual coords →
       wlr_seat absolute motion, clamped to bounds, no edge artifacts
-- [ ] pointer buttons + axis forwarding
-- [ ] keyboard: host keymap and state → wlr_seat keyboard
-- [ ] cursor: X cursor surface (seat cursor event) → host cursor with scaled
-      image + scaled hotspot; hidden cursor → empty host cursor; default
-      cursor restored on leave
+- [x] pointer buttons + axis forwarding
+- [x] keyboard: host keymap and state → wlr_seat keyboard
+- [x] cursor: game X cursor → host cursor with scaled image + scaled
+      hotspot; hidden cursor → empty host cursor; default restored on leave
 Exit criteria: window freely resizable with correct letterboxing; pointer
 sits exactly under the scaled cursor; keyboard works; cursor glides in and
-out of the window.
+out of the window. Verified on Hyprland (user confirmed): uniform-scale
+letterboxing live on resize; XWayland motion/keyboard/buttons/cursor all
+verified end-to-end with xtest clients. Key fixes that unlocked it:
+(1) a wl_output global is only exposed via wlr_output_layout — without a
+layout Xwayland saw a 0x0 screen and clamped every pointer position to
+(0,0), silently dropping all X input delivery; (2) wlroots 0.20 pointers
+require notify_frame after motion/button for Xwayland (pointer version ≥ 5)
+to dispatch; (3) keys must be delivered via wlr_seat_keyboard_notify_key
+(not just the device-level notify); (4) cursor semantics follow gamescope:
+the game cursor image is read via XFixes on a private X connection and
+pushed as the host cursor via wl_pointer.set_cursor, scaled through the fit
+transform; an empty/transparent game cursor hides the host cursor; the host
+cursor persists after pointer-leave until another surface overrides it.
 
 ### Phase 3 — Live resolution switching
 - [ ] detect game resolution change (focused game window resize; spike: the

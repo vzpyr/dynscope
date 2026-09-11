@@ -24,8 +24,10 @@
 #include <wlr/xwayland/xwayland.h>
 
 #include "dynscope.h"
+#include "host.h"
 #include "server.h"
 #include "xwm.h"
+#include "xcursor.h"
 
 #define DEFAULT_WIDTH 1280
 #define DEFAULT_HEIGHT 720
@@ -114,12 +116,56 @@ static void server_gpu_sync(struct server *s) {
 	wlr_egl_restore_context(&prev);
 }
 
+static void server_update_fit(struct server *s, int width, int height) {
+	s->win_w = width;
+	s->win_h = height;
+
+	int game_w = 0;
+	int game_h = 0;
+	xwm_game_size(s, &game_w, &game_h);
+
+	if (getenv("DYNSCOPE_DEBUG") != NULL)
+		fprintf(stderr, "dynscope: fit window=%dx%d game=%dx%d\n", width, height, game_w, game_h);
+
+	if (s->xwm == NULL || game_w <= 0 || game_h <= 0) {
+		s->fit.scale = 1.0;
+		s->fit.x = 0.0;
+		s->fit.y = 0.0;
+		s->fit.w = 0;
+		s->fit.h = 0;
+		return;
+	}
+
+	double old_scale = s->fit.scale;
+	double scale = (double)width / (double)game_w;
+	double scale_y = (double)height / (double)game_h;
+	if (scale_y < scale)
+		scale = scale_y;
+	int w = (int)((double)game_w * scale + 0.5);
+	int h = (int)((double)game_h * scale + 0.5);
+	if (w > width)
+		w = width;
+	if (h > height)
+		h = height;
+
+	s->fit.scale = scale;
+	s->fit.x = (double)(width - w) / 2.0;
+	s->fit.y = (double)(height - h) / 2.0;
+	s->fit.w = w;
+	s->fit.h = h;
+
+	if (old_scale != scale)
+		xcursor_refresh(s);
+}
+
 void server_present(struct dynscope *ds, int width, int height, struct frame_info *out) {
 	struct server *s = ds->server;
 	memset(out, 0, sizeof(*out));
 	out->fd = -1;
 	if (width <= 0 || height <= 0 || s == NULL)
 		return;
+
+	server_update_fit(s, width, height);
 
 	if (s->pool.width != width || s->pool.height != height)
 		frame_pool_resize(s, width, height);
@@ -165,9 +211,93 @@ void server_frame_released(struct dynscope *ds, int generation) {
 	for (int i = 0; i < s->pool.nframes; i++) {
 		if (s->pool.frames[i].generation == generation) {
 			s->pool.frames[i].in_flight = false;
+			if (getenv("DYNSCOPE_DEBUG") != NULL)
+				fprintf(stderr, "dynscope: frame %d released\n", generation);
 			return;
 		}
 	}
+	if (getenv("DYNSCOPE_DEBUG") != NULL)
+		fprintf(stderr, "dynscope: frame %d release MISSED\n", generation);
+}
+
+void server_pointer_enter(struct dynscope *ds, double host_x, double host_y) {
+	struct server *s = ds->server;
+	if (s == NULL)
+		return;
+
+	struct wlr_surface *surface = NULL;
+	double x, y;
+	xwm_pick_surface(s, host_x, host_y, &surface, &x, &y);
+	if (getenv("DYNSCOPE_DEBUG") != NULL)
+		fprintf(stderr, "dynscope: server pointer enter host=(%.0f,%.0f) surface=%p res=%u game=(%.1f,%.1f)\n", host_x, host_y, (void *)surface, surface != NULL ? wl_resource_get_id(surface->resource) : 0, x, y);
+	if (surface == NULL)
+		return;
+	s->pointer_surface = surface;
+	s->pointer_x = x;
+	s->pointer_y = y;
+	wlr_seat_pointer_notify_enter(s->seat, surface, x, y);
+	xcursor_refresh(s);
+	host_apply_cursor(ds);
+}
+
+void server_pointer_motion(struct dynscope *ds, uint32_t time_msec, double host_x, double host_y) {
+	struct server *s = ds->server;
+	if (s == NULL)
+		return;
+
+	struct wlr_surface *surface = NULL;
+	double x, y;
+	xwm_pick_surface(s, host_x, host_y, &surface, &x, &y);
+	s->pointer_x = x;
+	s->pointer_y = y;
+	if (surface == s->pointer_surface) {
+		if (surface != NULL) {
+			wlr_seat_pointer_notify_motion(s->seat, time_msec, x, y);
+			wlr_seat_pointer_notify_frame(s->seat);
+		}
+		return;
+	}
+
+	if (surface == NULL) {
+		s->pointer_surface = NULL;
+		s->pointer_x = 0;
+		s->pointer_y = 0;
+		wlr_seat_pointer_notify_clear_focus(s->seat);
+		host_request_frame(ds);
+		return;
+	}
+
+	s->pointer_surface = surface;
+	wlr_seat_pointer_notify_enter(s->seat, surface, x, y);
+}
+
+void server_pointer_leave(struct dynscope *ds) {
+	struct server *s = ds->server;
+	if (s == NULL)
+		return;
+	s->pointer_surface = NULL;
+	wlr_seat_pointer_notify_clear_focus(s->seat);
+	host_request_frame(ds);
+}
+
+void server_pointer_button(struct dynscope *ds, uint32_t time_msec, uint32_t button, uint32_t state) {
+	struct server *s = ds->server;
+	if (s == NULL)
+		return;
+	if (getenv("DYNSCOPE_DEBUG") != NULL)
+		fprintf(stderr, "dynscope: server button %u state=%u ptr_surface=%p\n", button, state, (void *)s->pointer_surface);
+	if (s->pointer_surface == NULL)
+		return;
+	wlr_seat_pointer_notify_button(s->seat, time_msec, button, (enum wl_pointer_button_state)state);
+	wlr_seat_pointer_notify_frame(s->seat);
+}
+
+void server_pointer_axis(struct dynscope *ds, uint32_t time_msec, uint32_t orientation, double value, int32_t value_discrete, uint32_t source) {
+	struct server *s = ds->server;
+	if (s == NULL || s->pointer_surface == NULL)
+		return;
+	wlr_seat_pointer_notify_axis(s->seat, time_msec, (enum wl_pointer_axis)orientation, value, value_discrete, (enum wl_pointer_axis_source)source, WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL);
+	wlr_seat_pointer_notify_frame(s->seat);
 }
 
 void server_keyboard_keymap(struct dynscope *ds, const char *keymap_string) {
@@ -187,6 +317,8 @@ void server_keyboard_key(struct dynscope *ds, uint32_t key, bool pressed) {
 	struct server *s = ds->server;
 	if (s == NULL)
 		return;
+	if (getenv("DYNSCOPE_DEBUG") != NULL)
+		fprintf(stderr, "dynscope: server key %u %s\n", key, pressed ? "down" : "up");
 
 	struct wlr_keyboard_key_event event = {
 		.keycode = key,
@@ -194,6 +326,8 @@ void server_keyboard_key(struct dynscope *ds, uint32_t key, bool pressed) {
 		.state = pressed ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED,
 	};
 	wlr_keyboard_notify_key(&s->keyboard, &event);
+	wlr_seat_set_keyboard(s->seat, &s->keyboard);
+	wlr_seat_keyboard_notify_key(s->seat, event.time_msec, key, event.state);
 }
 
 void server_keyboard_modifiers(struct dynscope *ds, uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group) {
@@ -211,6 +345,9 @@ const char *server_display_name(struct dynscope *ds) {
 static void handle_xwayland_ready(struct wl_listener *listener, void *data) {
 	(void)listener;
 	(void)data;
+	struct server *s = wl_container_of(listener, s, xwayland_ready);
+	xcursor_init(s);
+	xcursor_refresh(s);
 }
 
 static void handle_xwayland_destroy(struct wl_listener *listener, void *data) {
@@ -305,6 +442,7 @@ int server_init(struct dynscope *ds) {
 		fprintf(stderr, "dynscope: failed to create seat\n");
 		goto fail;
 	}
+	wlr_seat_set_capabilities(s->seat, WL_SEAT_CAPABILITY_POINTER | WL_SEAT_CAPABILITY_KEYBOARD);
 	wlr_seat_set_keyboard(s->seat, &s->keyboard);
 
 	s->data_device = wlr_data_device_manager_create(s->display);
@@ -325,6 +463,13 @@ int server_init(struct dynscope *ds) {
 		goto fail;
 	}
 	wlr_output_state_finish(&output_state);
+
+	s->layout = wlr_output_layout_create(s->display);
+	if (s->layout == NULL) {
+		fprintf(stderr, "dynscope: failed to create output layout\n");
+		goto fail;
+	}
+	wlr_output_layout_add(s->layout, s->output, 0, 0);
 
 	s->xwayland = wlr_xwayland_create(s->display, s->compositor, false);
 	if (s->xwayland == NULL) {
@@ -354,6 +499,7 @@ void server_finish(struct dynscope *ds) {
 	ds->server = NULL;
 
 	xwm_finish(s);
+	xcursor_finish(s);
 	if (s->xwayland != NULL) {
 		wl_list_remove(&s->xwayland_destroy.link);
 		wl_list_remove(&s->xwayland_ready.link);

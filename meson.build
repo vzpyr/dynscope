@@ -25,6 +25,8 @@ wayland_scanner = find_program('wayland-scanner')
 wayland_protocols_dir = wayland_protos_dep.get_variable(pkgconfig: 'pkgdatadir')
 xdg_shell_xml = join_paths(wayland_protocols_dir, 'stable', 'xdg-shell', 'xdg-shell.xml')
 linux_dmabuf_xml = join_paths(wayland_protocols_dir, 'stable', 'linux-dmabuf', 'linux-dmabuf-v1.xml')
+cursor_shape_xml = join_paths(wayland_protocols_dir, 'staging', 'cursor-shape', 'cursor-shape-v1.xml')
+tablet_xml = join_paths(wayland_protocols_dir, 'unstable', 'tablet', 'tablet-unstable-v2.xml')
 
 xdg_shell_header = custom_target(
   'xdg-shell client header',
@@ -54,10 +56,33 @@ linux_dmabuf_code = custom_target(
   command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
 )
 
+cursor_shape_header = custom_target(
+  'cursor-shape client header',
+  input: cursor_shape_xml,
+  output: 'cursor-shape-v1-client-protocol.h',
+  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
+)
+
+cursor_shape_code = custom_target(
+  'cursor-shape private code',
+  input: cursor_shape_xml,
+  output: 'cursor-shape-v1-protocol.c',
+  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+)
+
+tablet_code = custom_target(
+  'tablet private code',
+  input: tablet_xml,
+  output: 'tablet-unstable-v2-protocol.c',
+  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+)
+
 protocol_lib = static_library(
   'dynscope-protocols',
   xdg_shell_code,
   linux_dmabuf_code,
+  cursor_shape_code,
+  tablet_code,
   c_args: ['-w'],
 )
 
@@ -68,9 +93,11 @@ executable(
   'src/host.c',
   'src/server.c',
   'src/xwm.c',
+  'src/xcursor.c',
   xdg_shell_header,
   linux_dmabuf_header,
-  dependencies: [wayland_client_dep, wayland_server_dep, glesv2_dep, xkbcommon_dep, wlroots_dep],
+  cursor_shape_header,
+  dependencies: [wayland_client_dep, wayland_server_dep, glesv2_dep, xkbcommon_dep, wlroots_dep, dependency('xcb'), dependency('xcb-xfixes')],
   link_with: protocol_lib,
   include_directories: include_directories('src'),
 )

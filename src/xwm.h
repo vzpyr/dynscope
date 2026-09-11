@@ -3,12 +3,15 @@
 
 #include "dynscope.h"
 
-struct wlr_render_pass;
 struct server;
+struct wlr_render_pass;
+struct wlr_surface;
 
 int xwm_init(struct server *server);
 void xwm_finish(struct server *server);
 
+void xwm_game_size(struct server *server, int *width, int *height);
+void xwm_pick_surface(struct server *server, double host_x, double host_y, struct wlr_surface **surface, double *out_x, double *out_y);
 void xwm_draw(struct server *server, struct wlr_render_pass *pass, int width, int height);
 
 #endif
