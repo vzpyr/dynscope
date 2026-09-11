@@ -19,6 +19,7 @@
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_subcompositor.h>
+#include <wlr/types/wlr_viewporter.h>
 #include <wlr/interfaces/wlr_keyboard.h>
 #include <wlr/util/log.h>
 #include <wlr/xwayland/xwayland.h>
@@ -207,14 +208,10 @@ void server_frame_released(struct dynscope *ds, int generation) {
 		return;
 	for (int i = 0; i < s->pool.nframes; i++) {
 		if (s->pool.frames[i].generation == generation) {
-			s->pool.frames[i].in_flight = false;
-			if (getenv("DYNSCOPE_DEBUG") != NULL)
-				fprintf(stderr, "dynscope: frame %d released\n", generation);
+		s->pool.frames[i].in_flight = false;
 			return;
 		}
 	}
-	if (getenv("DYNSCOPE_DEBUG") != NULL)
-		fprintf(stderr, "dynscope: frame %d release MISSED\n", generation);
 }
 
 void server_pointer_enter(struct dynscope *ds, double host_x, double host_y) {
@@ -433,6 +430,10 @@ int server_init(struct dynscope *ds) {
 		goto fail;
 	}
 	s->subcompositor = wlr_subcompositor_create(s->display);
+	if (wlr_viewporter_create(s->display) == NULL) {
+		fprintf(stderr, "dynscope: failed to create viewporter\n");
+		goto fail;
+	}
 
 	s->seat = wlr_seat_create(s->display, "seat0");
 	if (s->seat == NULL) {

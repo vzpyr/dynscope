@@ -149,14 +149,25 @@ transform; an empty/transparent game cursor hides the host cursor; the host
 cursor persists after pointer-leave until another surface overrides it.
 
 ### Phase 3 — Live resolution switching
-- [ ] detect game resolution change (focused game window resize; spike: the
+- [x] detect game resolution change (focused game window resize; spike: the
       xrandr path through Xwayland RR emulation)
-- [ ] live virtual output mode switch (custom mode + commit); X screen and
+- [x] live virtual output mode switch (custom mode + commit); X screen and
       clients adapt; letterbox and pointer mapping follow
-- [ ] verify a mid-run resolution change (game menu / xrandr from a shell
+- [x] verify a mid-run resolution change (game menu / xrandr from a shell
       inside the session)
 Exit criteria: game resolution switch without restart; window just
-re-letterboxes.
+re-letterboxes. Verified on Hyprland (user confirmed): an X client switching
+its CRTC mode (RRSetCrtcConfig 800x600, Success) plus XResizeWindow mid-run
+changes the game resolution live; dynscope re-fits, re-letterboxes and
+remaps the pointer without restart. Key mechanism, following Xwayland 24.1
+rootless semantics: RR mode changes are emulated per-client through a
+wp_viewporter on the game surface (source = real framebuffer resolution,
+destination = logical screen size); dynscope therefore needs to expose the
+viewporter global (added) and render surfaces by their buffer source box
+(added), which makes any client-chosen resolution appear exactly as it
+would without dynscope. The harmless RRSetScreenSize BadMatch (screen may
+not shrink below the current CRTC size) is ignored by real games via an X
+error handler; our test client does the same.
 
 ### Phase 4 — Cursor lock semantics (gamescope parity)
 - [ ] server: wlr_pointer_constraints_v1 + wlr_relative_pointer_v1 wired to

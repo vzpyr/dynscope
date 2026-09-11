@@ -6,6 +6,7 @@
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_subcompositor.h>
+#include <xcb/xcb.h>
 #include <wlr/xwayland/xwayland.h>
 
 #include "dynscope.h"
@@ -24,6 +25,7 @@ struct xwindow {
 	struct wl_listener associate;
 	struct wl_listener dissociate;
 	struct wl_listener request_activate;
+	struct wl_listener request_configure;
 	struct wl_listener set_title;
 	struct wl_list link;
 };
@@ -76,6 +78,7 @@ static void handle_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&win->associate.link);
 	wl_list_remove(&win->dissociate.link);
 	wl_list_remove(&win->request_activate.link);
+	wl_list_remove(&win->request_configure.link);
 	wl_list_remove(&win->set_title.link);
 	wl_list_remove(&win->link);
 	free(win);
@@ -129,6 +132,17 @@ static void handle_request_activate(struct wl_listener *listener, void *data) {
 	claim_focus(win->xwm, xs);
 }
 
+static void handle_request_configure(struct wl_listener *listener, void *data) {
+	struct xwindow *win = wl_container_of(listener, win, request_configure);
+	struct wlr_xwayland_surface_configure_event *event = data;
+	struct xwm *xwm = win->xwm;
+	(void)xwm;
+
+	wlr_xwayland_surface_configure(win->xs, event->x, event->y, event->width, event->height);
+	if (getenv("DYNSCOPE_DEBUG") != NULL)
+		fprintf(stderr, "dynscope: configure request %ux%u at %d,%d\n", event->width, event->height, event->x, event->y);
+}
+
 static void handle_set_title(struct wl_listener *listener, void *data) {
 	struct xwindow *win = wl_container_of(listener, win, set_title);
 	(void)data;
@@ -155,6 +169,8 @@ static void handle_new_surface(struct wl_listener *listener, void *data) {
 	wl_signal_add(&xs->events.dissociate, &win->dissociate);
 	win->request_activate.notify = handle_request_activate;
 	wl_signal_add(&xs->events.request_activate, &win->request_activate);
+	win->request_configure.notify = handle_request_configure;
+	wl_signal_add(&xs->events.request_configure, &win->request_configure);
 	win->set_title.notify = handle_set_title;
 	wl_signal_add(&xs->events.set_title, &win->set_title);
 	wl_list_insert(xwm->windows.prev, &win->link);
@@ -167,8 +183,11 @@ static void draw_surface_tree(struct wlr_render_pass *pass, struct wlr_surface *
 
 	struct wlr_texture *texture = wlr_surface_get_texture(surface);
 	if (texture != NULL) {
+		struct wlr_fbox src;
+		wlr_surface_get_buffer_source_box(surface, &src);
 		struct wlr_render_texture_options options = {
 			.texture = texture,
+			.src_box = src,
 			.dst_box = {
 				(int)base_x,
 				(int)base_y,
@@ -191,8 +210,10 @@ void xwm_game_size(struct server *server, int *width, int *height) {
 	struct xwm *xwm = server->xwm;
 	if (xwm == NULL || xwm->game == NULL || xwm->game->surface == NULL)
 		return;
-	*width = xwm->game->surface->current.width;
-	*height = xwm->game->surface->current.height;
+	struct wlr_fbox src;
+	wlr_surface_get_buffer_source_box(xwm->game->surface, &src);
+	*width = (int)src.width;
+	*height = (int)src.height;
 }
 
 void xwm_pick_surface(struct server *server, double host_x, double host_y, struct wlr_surface **surface, double *out_x, double *out_y) {
@@ -231,9 +252,12 @@ void xwm_pick_surface(struct server *server, double host_x, double host_y, struc
 	if (xwm->game == NULL || xwm->game->surface == NULL || !xwm->game->surface->mapped)
 		return;
 
-	struct wlr_surface *game = xwm->game->surface;
-	double w = (double)game->current.width;
-	double h = (double)game->current.height;
+	int gw, gh;
+	xwm_game_size(server, &gw, &gh);
+	double w = (double)gw;
+	double h = (double)gh;
+	if (w <= 0 || h <= 0)
+		return;
 	if (gx < 0 || gy < 0 || gx >= w || gy >= h) {
 		gx = gx < 0 ? 0 : gx;
 		gy = gy < 0 ? 0 : gy;
@@ -242,7 +266,7 @@ void xwm_pick_surface(struct server *server, double host_x, double host_y, struc
 		if (gy >= h)
 			gy = h - 0.01;
 	}
-	*surface = game;
+	*surface = xwm->game->surface;
 	*out_x = gx;
 	*out_y = gy;
 }
@@ -275,6 +299,7 @@ void xwm_finish(struct server *server) {
 		wl_list_remove(&win->associate.link);
 		wl_list_remove(&win->dissociate.link);
 		wl_list_remove(&win->request_activate.link);
+		wl_list_remove(&win->request_configure.link);
 		wl_list_remove(&win->set_title.link);
 		free(win);
 	}
@@ -292,6 +317,14 @@ void xwm_draw(struct server *server, struct wlr_render_pass *pass, int width, in
 	struct wlr_surface *drawn[MAX_DRAWN_SURFACES];
 	int ndrawn = 0;
 
+	double origin_x = 0.0;
+	double origin_y = 0.0;
+	if (xwm->game != NULL && xwm->game->surface != NULL) {
+		struct wlr_xwayland_surface *xs = xwm->game;
+		origin_x = (double)xs->x;
+		origin_y = (double)xs->y;
+	}
+
 	if (xwm->game != NULL && xwm->game->surface != NULL && xwm->game->surface->mapped && fit->scale > 0.0) {
 		draw_surface_tree(pass, xwm->game->surface, fit->x, fit->y, fit->scale, drawn, &ndrawn);
 	}
@@ -301,8 +334,8 @@ void xwm_draw(struct server *server, struct wlr_render_pass *pass, int width, in
 		struct wlr_xwayland_surface *xs = win->xs;
 		if (!xs->override_redirect || xs->surface == NULL || !xs->surface->mapped)
 			continue;
-		double x = fit->x + (double)xs->x * fit->scale;
-		double y = fit->y + (double)xs->y * fit->scale;
+		double x = fit->x + ((double)xs->x - origin_x) * fit->scale;
+		double y = fit->y + ((double)xs->y - origin_y) * fit->scale;
 		draw_surface_tree(pass, xs->surface, x, y, fit->scale, drawn, &ndrawn);
 	}
 
