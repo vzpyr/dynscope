@@ -136,7 +136,6 @@ static void server_update_fit(struct server *s, int width, int height) {
 		return;
 	}
 
-	double old_scale = s->fit.scale;
 	double scale = (double)width / (double)game_w;
 	double scale_y = (double)height / (double)game_h;
 	if (scale_y < scale)
@@ -154,8 +153,6 @@ static void server_update_fit(struct server *s, int width, int height) {
 	s->fit.w = w;
 	s->fit.h = h;
 
-	if (old_scale != scale)
-		xcursor_refresh(s);
 }
 
 void server_present(struct dynscope *ds, int width, int height, struct frame_info *out) {

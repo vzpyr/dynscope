@@ -82,7 +82,7 @@ static void xcursor_update_texture(struct xcursor *xc, xcb_xfixes_get_cursor_ima
 	xc->tex_hot_y = img->yhot;
 	xc->tex_valid = true;
 
-	double scale = s->fit.scale > 0.0 ? s->fit.scale : 1.0;
+	double scale = 1.0;
 	int out_w = (int)((double)w * scale + 0.5);
 	int out_h = (int)((double)h * scale + 0.5);
 	if (out_w < 1)
