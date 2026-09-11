@@ -2,6 +2,7 @@
 #define SERVER_H
 
 #include <xkbcommon/xkbcommon.h>
+#include <pixman.h>
 
 #include <wlr/backend.h>
 #include <wlr/render/allocator.h>
@@ -12,6 +13,8 @@
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_output_layout.h>
+#include <wlr/types/wlr_pointer_constraints_v1.h>
+#include <wlr/types/wlr_relative_pointer_v1.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/xwayland/xwayland.h>
@@ -59,6 +62,14 @@ struct xcursor {
 	struct wl_event_source *fd_src;
 };
 
+struct game_constraint {
+	struct server *server;
+	struct wlr_pointer_constraint_v1 *constraint;
+	struct wl_listener set_region;
+	struct wl_listener destroy;
+	struct wl_list link;
+};
+
 struct server {
 	struct dynscope *ds;
 	struct wl_display *display;
@@ -79,6 +90,15 @@ struct server {
 	struct wlr_keyboard keyboard;
 	struct xwm *xwm;
 	struct xcursor *xcursor;
+	struct wlr_pointer_constraints_v1 *constraints;
+	struct wlr_relative_pointer_manager_v1 *relative_pointer;
+	struct wl_listener new_constraint;
+	struct wl_list game_constraints;
+	struct wlr_pointer_constraint_v1 *active_constraint;
+	pixman_region32_t confine;
+	bool constraint_requires_warp;
+	bool cursor_image_empty;
+	bool host_locked;
 	struct frame_pool pool;
 	struct fit fit;
 	int win_w;
@@ -99,8 +119,13 @@ void server_frame_released(struct dynscope *ds, int generation);
 void server_pointer_enter(struct dynscope *ds, double host_x, double host_y);
 void server_pointer_motion(struct dynscope *ds, uint32_t time_msec, double host_x, double host_y);
 void server_pointer_leave(struct dynscope *ds);
+void server_pointer_rel_motion(struct dynscope *ds, uint32_t time_msec, uint64_t time_usec, double dx, double dy);
 void server_pointer_button(struct dynscope *ds, uint32_t time_msec, uint32_t button, uint32_t state);
 void server_pointer_axis(struct dynscope *ds, uint32_t time_msec, uint32_t orientation, double value, int32_t value_discrete, uint32_t source);
+
+void server_constrain_focused(struct server *server);
+void server_keyboard_focus(struct dynscope *ds, bool focused);
+void server_update_lock(struct server *server);
 
 void server_keyboard_keymap(struct dynscope *ds, const char *keymap_string);
 void server_keyboard_key(struct dynscope *ds, uint32_t key, bool pressed);

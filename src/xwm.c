@@ -42,6 +42,7 @@ static void keyboard_focus(struct xwm *xwm, struct wlr_xwayland_surface *xs) {
 		return;
 	wlr_xwayland_surface_activate(xs, true);
 	wlr_seat_keyboard_notify_enter(xwm->server->seat, xs->surface, NULL, 0, NULL);
+	server_constrain_focused(xwm->server);
 }
 
 static struct wlr_xwayland_surface *pick_focus(struct xwm *xwm) {
@@ -202,6 +203,13 @@ static void draw_surface_tree(struct wlr_render_pass *pass, struct wlr_surface *
 
 	wl_list_for_each(sub, &surface->current.subsurfaces_above, current.link)
 		draw_surface_tree(pass, sub->surface, base_x + sub->current.x * scale, base_y + sub->current.y * scale, scale, drawn, ndrawn);
+}
+
+struct wlr_surface *xwm_focus_surface(struct server *server) {
+	struct xwm *xwm = server->xwm;
+	if (xwm == NULL || xwm->game == NULL)
+		return NULL;
+	return xwm->game->surface;
 }
 
 void xwm_game_size(struct server *server, int *width, int *height) {

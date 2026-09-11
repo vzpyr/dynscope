@@ -15,6 +15,8 @@
 #include "xdg-shell-client-protocol.h"
 #include "linux-dmabuf-v1-client-protocol.h"
 #include "cursor-shape-v1-client-protocol.h"
+#include "pointer-constraints-unstable-v1-client-protocol.h"
+#include "relative-pointer-unstable-v1-client-protocol.h"
 
 #define DEFAULT_WIDTH 1280
 #define DEFAULT_HEIGHT 720
@@ -52,6 +54,12 @@ struct host {
 	struct wl_pointer *pointer;
 	struct wp_cursor_shape_manager_v1 *cursor_shape_manager;
 	struct wp_cursor_shape_device_v1 *cursor_shape_device;
+	struct zwp_pointer_constraints_v1 *pointer_constraints;
+	struct zwp_relative_pointer_manager_v1 *relative_pointer_manager;
+	struct zwp_locked_pointer_v1 *locked_pointer;
+	struct zwp_relative_pointer_v1 *relative_pointer;
+	bool pointer_locked;
+	bool keyboard_entered;
 	struct zwp_linux_dmabuf_v1 *dmabuf;
 	struct xdg_wm_base *wm_base;
 	struct wl_surface *surface;
@@ -89,6 +97,8 @@ static const struct wl_seat_listener seat_listener;
 static const struct wl_keyboard_listener keyboard_listener;
 static const struct wl_pointer_listener pointer_listener;
 static const struct wl_buffer_listener buffer_listener;
+static const struct zwp_locked_pointer_v1_listener locked_pointer_listener;
+static const struct zwp_relative_pointer_v1_listener relative_pointer_listener;
 
 static void host_apply_cursor_impl(struct host *host);
 
@@ -107,6 +117,10 @@ static void registry_handle_global(void *data, struct wl_registry *registry, uin
 		host->wm_base = wl_registry_bind(registry, name, &xdg_wm_base_interface, version < (uint32_t)xdg_wm_base_interface.version ? version : (uint32_t)xdg_wm_base_interface.version);
 	else if (strcmp(interface, zwp_linux_dmabuf_v1_interface.name) == 0)
 		host->dmabuf = wl_registry_bind(registry, name, &zwp_linux_dmabuf_v1_interface, version < 3u ? version : 3u);
+	else if (strcmp(interface, zwp_pointer_constraints_v1_interface.name) == 0)
+		host->pointer_constraints = wl_registry_bind(registry, name, &zwp_pointer_constraints_v1_interface, version < 1u ? version : 1u);
+	else if (strcmp(interface, zwp_relative_pointer_manager_v1_interface.name) == 0)
+		host->relative_pointer_manager = wl_registry_bind(registry, name, &zwp_relative_pointer_manager_v1_interface, version < 1u ? version : 1u);
 }
 
 static void registry_handle_global_remove(void *data, struct wl_registry *registry, uint32_t name) {
@@ -332,18 +346,24 @@ static void keyboard_handle_keymap(void *data, struct wl_keyboard *keyboard, uin
 }
 
 static void keyboard_handle_enter(void *data, struct wl_keyboard *keyboard, uint32_t serial, struct wl_surface *surface, struct wl_array *keys) {
-	(void)data;
+	struct host *host = data;
 	(void)keyboard;
 	(void)serial;
 	(void)surface;
 	(void)keys;
+	host->keyboard_entered = true;
+	server_keyboard_focus(host->ds, true);
+	host_apply_cursor_impl(host);
 }
 
 static void keyboard_handle_leave(void *data, struct wl_keyboard *keyboard, uint32_t serial, struct wl_surface *surface) {
-	(void)data;
+	struct host *host = data;
 	(void)keyboard;
 	(void)serial;
 	(void)surface;
+	host->keyboard_entered = false;
+	server_keyboard_focus(host->ds, false);
+	host_apply_cursor_impl(host);
 }
 
 static void keyboard_handle_key(void *data, struct wl_keyboard *keyboard, uint32_t serial, uint32_t time, uint32_t key, uint32_t state) {
@@ -475,6 +495,44 @@ static const struct wl_pointer_listener pointer_listener = {
 	.axis_value120 = pointer_handle_axis_value120,
 };
 
+static void locked_pointer_handle_locked(void *data, struct zwp_locked_pointer_v1 *locked_pointer) {
+	struct host *host = data;
+	(void)locked_pointer;
+	host->pointer_locked = true;
+	if (getenv("DYNSCOPE_DEBUG") != NULL)
+		fprintf(stderr, "dynscope: host pointer locked\n");
+	host_apply_cursor_impl(host);
+}
+
+static void locked_pointer_handle_unlocked(void *data, struct zwp_locked_pointer_v1 *locked_pointer) {
+	struct host *host = data;
+	(void)locked_pointer;
+	host->pointer_locked = false;
+	if (getenv("DYNSCOPE_DEBUG") != NULL)
+		fprintf(stderr, "dynscope: host pointer unlocked\n");
+	host_apply_cursor_impl(host);
+}
+
+static const struct zwp_locked_pointer_v1_listener locked_pointer_listener = {
+	.locked = locked_pointer_handle_locked,
+	.unlocked = locked_pointer_handle_unlocked,
+};
+
+static void relative_pointer_handle_relative_motion(void *data, struct zwp_relative_pointer_v1 *relative_pointer, uint32_t time_hi, uint32_t time_lo, wl_fixed_t dx, wl_fixed_t dy, wl_fixed_t dx_unaccel, wl_fixed_t dy_unaccel) {
+	struct host *host = data;
+	(void)relative_pointer;
+	(void)dx;
+	(void)dy;
+	if (!host->pointer_locked || !host->keyboard_entered)
+		return;
+	uint64_t time_usec = ((uint64_t)time_hi << 32) | time_lo;
+	server_pointer_rel_motion(host->ds, (uint32_t)(time_usec / 1000), time_usec, wl_fixed_to_double(dx_unaccel), wl_fixed_to_double(dy_unaccel));
+}
+
+static const struct zwp_relative_pointer_v1_listener relative_pointer_listener = {
+	.relative_motion = relative_pointer_handle_relative_motion,
+};
+
 static void host_cursor_clear_buffer(struct host_cursor *cursor) {
 	free(cursor->pixels);
 	cursor->pixels = NULL;
@@ -491,10 +549,22 @@ static void host_apply_cursor_impl(struct host *host) {
 	}
 
 	if (getenv("DYNSCOPE_DEBUG") != NULL)
-		fprintf(stderr, "dynscope: apply cursor mode=%d serial=%u\n", cursor->mode, host->pointer_enter_serial);
+		fprintf(stderr, "dynscope: apply cursor mode=%d serial=%u locked=%d kb=%d\n", cursor->mode, host->pointer_enter_serial, host->pointer_locked, host->keyboard_entered);
 
 	wl_display_dispatch_pending(host->display);
 	wl_display_flush(host->display);
+
+	if (host->pointer_locked) {
+		if (!host->keyboard_entered) {
+			if (host->cursor_shape_device != NULL)
+				wp_cursor_shape_device_v1_set_shape(host->cursor_shape_device, host->pointer_enter_serial, WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT);
+			else
+				wl_pointer_set_cursor(host->pointer, host->pointer_enter_serial, NULL, 0, 0);
+		} else {
+			wl_pointer_set_cursor(host->pointer, host->pointer_enter_serial, NULL, 0, 0);
+		}
+		return;
+	}
 
 	if (cursor->mode == CURSOR_HIDDEN) {
 		wl_pointer_set_cursor(host->pointer, host->pointer_enter_serial, NULL, 0, 0);
@@ -576,6 +646,45 @@ void host_set_cursor_hidden(struct dynscope *ds) {
 	host_cursor_clear_buffer(&ds->host->cursor);
 	ds->host->cursor.mode = CURSOR_HIDDEN;
 	host_apply_cursor_impl(ds->host);
+}
+
+void host_set_locked(struct dynscope *ds, bool locked) {
+	struct host *host = ds->host;
+	if (host == NULL || host->pointer == NULL || host->surface == NULL)
+		return;
+	if (host->pointer_constraints == NULL || host->relative_pointer_manager == NULL) {
+		static bool warned = false;
+		if (locked && !warned) {
+			fprintf(stderr, "dynscope: host compositor lacks pointer-constraints/relative-pointer, cursor lock unavailable\n");
+			warned = true;
+		}
+		return;
+	}
+
+	if (locked == (host->locked_pointer != NULL))
+		return;
+
+	if (host->locked_pointer != NULL) {
+		zwp_locked_pointer_v1_destroy(host->locked_pointer);
+		host->locked_pointer = NULL;
+		zwp_relative_pointer_v1_destroy(host->relative_pointer);
+		host->relative_pointer = NULL;
+		host->pointer_locked = false;
+	}
+
+	if (locked) {
+		host->locked_pointer = zwp_pointer_constraints_v1_lock_pointer(host->pointer_constraints, host->surface, host->pointer, NULL, ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_PERSISTENT);
+		if (host->locked_pointer == NULL)
+			return;
+		zwp_locked_pointer_v1_add_listener(host->locked_pointer, &locked_pointer_listener, host);
+		host->relative_pointer = zwp_relative_pointer_manager_v1_get_relative_pointer(host->relative_pointer_manager, host->pointer);
+		if (host->relative_pointer != NULL)
+			zwp_relative_pointer_v1_add_listener(host->relative_pointer, &relative_pointer_listener, host);
+		if (getenv("DYNSCOPE_DEBUG") != NULL)
+			fprintf(stderr, "dynscope: host lock requested\n");
+	}
+
+	host_apply_cursor_impl(host);
 }
 
 void host_apply_cursor(struct dynscope *ds) {
@@ -733,6 +842,14 @@ void host_close(struct dynscope *ds) {
 		wl_keyboard_destroy(host->keyboard);
 	if (host->pointer != NULL)
 		wl_pointer_destroy(host->pointer);
+	if (host->relative_pointer != NULL)
+		zwp_relative_pointer_v1_destroy(host->relative_pointer);
+	if (host->locked_pointer != NULL)
+		zwp_locked_pointer_v1_destroy(host->locked_pointer);
+	if (host->relative_pointer_manager != NULL)
+		zwp_relative_pointer_manager_v1_destroy(host->relative_pointer_manager);
+	if (host->pointer_constraints != NULL)
+		zwp_pointer_constraints_v1_destroy(host->pointer_constraints);
 	if (host->cursor_shape_device != NULL)
 		wp_cursor_shape_device_v1_destroy(host->cursor_shape_device);
 	if (host->cursor_shape_manager != NULL)

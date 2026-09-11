@@ -15,7 +15,7 @@ in your session.
 | Pointer, no grab | Host pointer maps into game coordinates while inside the window; cursor glides out of the window like any normal cursor |
 | Pointer, game grab | X11 `XGrabPointer` → XWayland → pointer constraint → host pointer locked to our window |
 | Pointer, grab with confine_to | → host pointer confined to our window |
-| Cursor image | Game's X cursor rendered as the host cursor (scaled, hotspot scaled); game hides cursor → host cursor hidden; while locked, cursor is drawn in-frame at the virtual position |
+| Cursor image | Game's X cursor rendered as the host cursor (scaled, hotspot scaled); game hides cursor → host cursor hidden; while locked the host cursor stays hidden and the game renders its own cursor (gamescope-nested parity: the Wayland backend never paints the cursor in-frame) |
 | Keyboard | Host keymap/state forwarded to the game; game has keyboard focus iff our window is focused |
 | Clipboard | Bridged both directions (clipboard + primary selection) |
 | Launch | `dynscope -- CMD...`; child env wired (DISPLAY); exit code passthrough |
@@ -170,19 +170,13 @@ not shrink below the current CRTC size) is ignored by real games via an X
 error handler; our test client does the same.
 
 ### Phase 4 — Cursor lock semantics (gamescope parity)
-- [ ] server: wlr_pointer_constraints_v1 + wlr_relative_pointer_v1 wired to
-      the seat; activate/deactivate on the focused surface
-- [ ] confine region + cursor hint handling (warp-to-hint equivalent)
-- [ ] host lock rule: game constraint active && game cursor hidden →
-      zwp_locked_pointer (persistent) + zwp_relative_pointer; unlock +
-      warp-to-hint on release (steamcompmgr.cpp:10402 rule)
-- [ ] relative motion: unaccelerated host deltas → virtual cursor, 1:1 game
-      pixel sensitivity, constraint clamping
-- [ ] visibility sync: locked → host cursor hidden + in-frame cursor at
-      virtual position; unlocked → host cursor = game cursor
-- [ ] verify: SDL2/SDL3 camera-look games (raw XI2 and warp-loop styles),
-      menus release the pointer, glide out/in, no snap-back, no drift
-Exit criteria: camera games behave exactly like nested gamescope.
+- [x] server: wlr_pointer_constraints_v1 + wlr_relative_pointer_v1 wired to the seat; activate/deactivate on the focused surface
+- [x] confine region + cursor hint handling (warp-to-hint equivalent)
+- [x] host lock rule: game constraint active && game cursor hidden → zwp_locked_pointer (persistent) + zwp_relative_pointer; unlock + warp-to-hint on release (steamcompmgr.cpp:10402 rule)
+- [x] relative motion: unaccelerated host deltas → virtual cursor, 1:1 game pixel sensitivity, constraint clamping
+- [x] visibility sync: locked → host cursor hidden; unlocked → host cursor = game cursor. Verified finding: nested gamescope does NOT draw an in-frame cursor while locked (WaylandBackend does not override backend.h ShouldPaintCursor() → false); the game renders its own crosshair. dynscope matches: host cursor hidden while locked, no in-frame paint
+- [x] verify: grab+warp-loop client (XGrabPointer + confine + hidden cursor + XWarpPointer loop) and raw XI2 client (XI_RawMotion stream); pointer locks on tab-in, releases on tab-out, re-locks on re-entry, deltas arrive 1:1 with no drift, buttons forwarded while locked
+Exit criteria: camera games behave exactly like nested gamescope. Verified on Hyprland (user confirmed): both client styles lock/unlock correctly; the lock rule fires exactly on (game cursor hidden && active constraint) per steamcompmgr.cpp:10402. Key mechanisms: XWayland translates X11 grabs into wp_pointer_constraints lock/confine requests and XWarpPointer into cursor-position hints; dynscope activates the constraint on keyboard focus (gamescope wlserver_constrain_cursor), evaluates the lock rule on every constraint/cursor state change, and forwards host unaccelerated relative deltas into the seat with wlr_region_confine clamping for the confined case.
 
 ### Phase 5 — Clipboard and primary selection
 - [ ] game → host: X selection change → data source / primary source to host
@@ -204,8 +198,6 @@ Exit criteria: copy/paste works both ways, clipboard + primary.
 - xrandr-driven resolution changes (vs window resize): Xwayland RR emulation
   limits; spike in phase 3. Fallback: window-resize trigger only, which is
   the dominant path for real games.
-- Hyprland pointer-constraint support for our client window: verify early in
-  phase 4 with a minimal lock probe before building on it.
 - wlroots 0.20 vs 0.21-dev API drift: code against system wlroots-0.20.
 
 ## Testing protocol (every phase)

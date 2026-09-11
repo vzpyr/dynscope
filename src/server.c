@@ -2,6 +2,8 @@
 #include <GLES2/gl2.h>
 #include <drm_fourcc.h>
 #include <fcntl.h>
+#include <float.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,11 +19,14 @@
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_output.h>
+#include <wlr/types/wlr_pointer_constraints_v1.h>
+#include <wlr/types/wlr_relative_pointer_v1.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_viewporter.h>
 #include <wlr/interfaces/wlr_keyboard.h>
 #include <wlr/util/log.h>
+#include <wlr/util/region.h>
 #include <wlr/xwayland/xwayland.h>
 
 #include "dynscope.h"
@@ -46,6 +51,9 @@ bool wlr_egl_restore_context(struct wlr_egl_context *context);
 static const struct wlr_keyboard_impl keyboard_impl = {
 	.name = "dynscope",
 };
+
+static void server_constrain(struct server *s, struct wlr_pointer_constraint_v1 *constraint);
+static void server_warp_to_constraint_hint(struct server *s);
 
 static int frame_alloc(struct server *s, int width, int height, struct frame *out) {
 	uint64_t modifiers[1] = {DRM_FORMAT_MOD_LINEAR};
@@ -274,6 +282,55 @@ void server_pointer_leave(struct dynscope *ds) {
 	host_request_frame(ds);
 }
 
+void server_pointer_rel_motion(struct dynscope *ds, uint32_t time_msec, uint64_t time_usec, double dx, double dy) {
+	struct server *s = ds->server;
+	if (s == NULL || s->pointer_surface == NULL)
+		return;
+
+	wlr_relative_pointer_manager_v1_send_relative_motion(s->relative_pointer, s->seat, time_usec, dx, dy, dx, dy);
+
+	struct wlr_pointer_constraint_v1 *constraint = s->active_constraint;
+	if (constraint != NULL) {
+		if (constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED) {
+			wlr_seat_pointer_notify_frame(s->seat);
+			return;
+		}
+		if (!pixman_region32_empty(&s->confine)) {
+			double sx = s->pointer_x;
+			double sy = s->pointer_y;
+			double nx, ny;
+			if (!wlr_region_confine(&s->confine, sx, sy, sx + dx, sy + dy, &nx, &ny)) {
+				wlr_seat_pointer_notify_frame(s->seat);
+				return;
+			}
+			dx = nx - sx;
+			dy = ny - sy;
+			if (dx == 0.0 && dy == 0.0) {
+				wlr_seat_pointer_notify_frame(s->seat);
+				return;
+			}
+		}
+	}
+
+	s->pointer_x += dx;
+	s->pointer_y += dy;
+	if (s->pointer_surface->current.width > 0) {
+		double max_x = (double)(s->pointer_surface->current.width - 1);
+		double max_y = (double)(s->pointer_surface->current.height - 1);
+		if (s->pointer_x < 0.0)
+			s->pointer_x = 0.0;
+		if (s->pointer_y < 0.0)
+			s->pointer_y = 0.0;
+		if (s->pointer_x > max_x)
+			s->pointer_x = max_x;
+		if (s->pointer_y > max_y)
+			s->pointer_y = max_y;
+	}
+
+	wlr_seat_pointer_notify_motion(s->seat, time_msec, s->pointer_x, s->pointer_y);
+	wlr_seat_pointer_notify_frame(s->seat);
+}
+
 void server_pointer_button(struct dynscope *ds, uint32_t time_msec, uint32_t button, uint32_t state) {
 	struct server *s = ds->server;
 	if (s == NULL)
@@ -292,6 +349,173 @@ void server_pointer_axis(struct dynscope *ds, uint32_t time_msec, uint32_t orien
 		return;
 	wlr_seat_pointer_notify_axis(s->seat, time_msec, (enum wl_pointer_axis)orientation, value, value_discrete, (enum wl_pointer_axis_source)source, WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL);
 	wlr_seat_pointer_notify_frame(s->seat);
+}
+
+static void server_warp_to_constraint_hint(struct server *s) {
+	struct wlr_pointer_constraint_v1 *constraint = s->active_constraint;
+	if (constraint == NULL || !constraint->current.cursor_hint.enabled)
+		return;
+	double sx = constraint->current.cursor_hint.x;
+	double sy = constraint->current.cursor_hint.y;
+	if (s->pointer_x == sx && s->pointer_y == sy)
+		return;
+	s->pointer_x = sx;
+	s->pointer_y = sy;
+	wlr_seat_pointer_warp(s->seat, sx, sy);
+	if (getenv("DYNSCOPE_DEBUG") != NULL)
+		fprintf(stderr, "dynscope: warp to cursor hint (%.1f,%.1f)\n", sx, sy);
+}
+
+static void server_update_cursor_constraint(struct server *s) {
+	struct wlr_pointer_constraint_v1 *constraint = s->active_constraint;
+	if (constraint == NULL)
+		return;
+
+	if (s->constraint_requires_warp && constraint->surface != NULL) {
+		s->constraint_requires_warp = false;
+
+		server_warp_to_constraint_hint(s);
+
+		if (!pixman_region32_contains_point(&constraint->region, floor(s->pointer_x), floor(s->pointer_y), NULL)) {
+			int nboxes;
+			pixman_box32_t *boxes = pixman_region32_rectangles(&constraint->region, &nboxes);
+			if (nboxes > 0) {
+				double best_dist = DBL_MAX;
+				int best = 0;
+				for (int i = 0; i < nboxes; i++) {
+					double cx = s->pointer_x;
+					double cy = s->pointer_y;
+					if (cx < boxes[i].x1)
+						cx = boxes[i].x1;
+					if (cx > boxes[i].x2)
+						cx = boxes[i].x2;
+					if (cy < boxes[i].y1)
+						cy = boxes[i].y1;
+					if (cy > boxes[i].y2)
+						cy = boxes[i].y2;
+					double dx = cx - s->pointer_x;
+					double dy = cy - s->pointer_y;
+					double dist = dx * dx + dy * dy;
+					if (dist < best_dist) {
+						best_dist = dist;
+						best = i;
+					}
+				}
+				s->pointer_x = s->pointer_x < boxes[best].x1 ? boxes[best].x1 : (s->pointer_x > boxes[best].x2 ? boxes[best].x2 : s->pointer_x);
+				s->pointer_y = s->pointer_y < boxes[best].y1 ? boxes[best].y1 : (s->pointer_y > boxes[best].y2 ? boxes[best].y2 : s->pointer_y);
+				wlr_seat_pointer_warp(s->seat, s->pointer_x, s->pointer_y);
+			}
+		}
+	}
+
+	if (constraint->type == WLR_POINTER_CONSTRAINT_V1_CONFINED)
+		pixman_region32_copy(&s->confine, &constraint->region);
+	else
+		pixman_region32_clear(&s->confine);
+}
+
+static void server_constrain(struct server *s, struct wlr_pointer_constraint_v1 *constraint) {
+	if (s->active_constraint == constraint)
+		return;
+
+	if (s->active_constraint != NULL) {
+		if (constraint == NULL)
+			server_warp_to_constraint_hint(s);
+		wlr_pointer_constraint_v1_send_deactivated(s->active_constraint);
+		s->active_constraint = NULL;
+	}
+	pixman_region32_clear(&s->confine);
+
+	if (constraint == NULL) {
+		server_update_lock(s);
+		return;
+	}
+
+	s->active_constraint = constraint;
+	s->constraint_requires_warp = true;
+	server_update_cursor_constraint(s);
+	wlr_pointer_constraint_v1_send_activated(constraint);
+	server_update_lock(s);
+}
+
+void server_constrain_focused(struct server *s) {
+	if (s == NULL || s->constraints == NULL)
+		return;
+	struct wlr_surface *surface = xwm_focus_surface(s);
+	struct wlr_pointer_constraint_v1 *constraint = NULL;
+	if (surface != NULL)
+		constraint = wlr_pointer_constraints_v1_constraint_for_surface(s->constraints, surface, s->seat);
+	server_constrain(s, constraint);
+}
+
+void server_keyboard_focus(struct dynscope *ds, bool focused) {
+	struct server *s = ds->server;
+	if (s == NULL)
+		return;
+	if (focused)
+		server_constrain_focused(s);
+	else
+		server_constrain(s, NULL);
+}
+
+void server_update_lock(struct server *s) {
+	if (s == NULL)
+		return;
+	bool relative = s->cursor_image_empty && s->active_constraint != NULL;
+	if (relative == s->host_locked)
+		return;
+	s->host_locked = relative;
+	if (getenv("DYNSCOPE_DEBUG") != NULL)
+		fprintf(stderr, "dynscope: relative mouse mode %s (cursor_empty=%d constraint=%d)\n", relative ? "on" : "off", s->cursor_image_empty, s->active_constraint != NULL);
+	host_set_locked(s->ds, relative);
+}
+
+static void handle_constraint_set_region(struct wl_listener *listener, void *data) {
+	struct game_constraint *gc = wl_container_of(listener, gc, set_region);
+	(void)data;
+	struct server *s = gc->server;
+	if (s->active_constraint == gc->constraint) {
+		s->constraint_requires_warp = true;
+		server_update_cursor_constraint(s);
+	}
+}
+
+static void handle_constraint_destroy(struct wl_listener *listener, void *data) {
+	struct game_constraint *gc = wl_container_of(listener, gc, destroy);
+	struct server *s = gc->server;
+	struct wlr_pointer_constraint_v1 *constraint = gc->constraint;
+	(void)data;
+
+	wl_list_remove(&gc->set_region.link);
+	wl_list_remove(&gc->destroy.link);
+	wl_list_remove(&gc->link);
+	free(gc);
+
+	if (s->active_constraint == constraint) {
+		server_warp_to_constraint_hint(s);
+		s->active_constraint = NULL;
+		pixman_region32_clear(&s->confine);
+		server_update_lock(s);
+	}
+}
+
+static void handle_new_constraint(struct wl_listener *listener, void *data) {
+	struct server *s = wl_container_of(listener, s, new_constraint);
+	struct wlr_pointer_constraint_v1 *constraint = data;
+
+	struct game_constraint *gc = calloc(1, sizeof(*gc));
+	if (gc == NULL)
+		return;
+	gc->server = s;
+	gc->constraint = constraint;
+	gc->set_region.notify = handle_constraint_set_region;
+	wl_signal_add(&constraint->events.set_region, &gc->set_region);
+	gc->destroy.notify = handle_constraint_destroy;
+	wl_signal_add(&constraint->events.destroy, &gc->destroy);
+	wl_list_insert(s->game_constraints.prev, &gc->link);
+
+	if (xwm_focus_surface(s) == constraint->surface)
+		server_constrain(s, constraint);
 }
 
 void server_keyboard_keymap(struct dynscope *ds, const char *keymap_string) {
@@ -445,6 +669,22 @@ int server_init(struct dynscope *ds) {
 
 	s->data_device = wlr_data_device_manager_create(s->display);
 
+	s->constraints = wlr_pointer_constraints_v1_create(s->display);
+	if (s->constraints == NULL) {
+		fprintf(stderr, "dynscope: failed to create pointer constraints manager\n");
+		goto fail;
+	}
+	s->new_constraint.notify = handle_new_constraint;
+	wl_signal_add(&s->constraints->events.new_constraint, &s->new_constraint);
+	wl_list_init(&s->game_constraints);
+	pixman_region32_init(&s->confine);
+
+	s->relative_pointer = wlr_relative_pointer_manager_v1_create(s->display);
+	if (s->relative_pointer == NULL) {
+		fprintf(stderr, "dynscope: failed to create relative pointer manager\n");
+		goto fail;
+	}
+
 	s->output = wlr_headless_add_output(s->backend, DEFAULT_WIDTH, DEFAULT_HEIGHT);
 	if (s->output == NULL) {
 		fprintf(stderr, "dynscope: failed to create virtual output\n");
@@ -498,11 +738,13 @@ void server_finish(struct dynscope *ds) {
 
 	xwm_finish(s);
 	xcursor_finish(s);
+	wl_list_remove(&s->new_constraint.link);
 	if (s->xwayland != NULL) {
 		wl_list_remove(&s->xwayland_destroy.link);
 		wl_list_remove(&s->xwayland_ready.link);
 		wlr_xwayland_destroy(s->xwayland);
 	}
+	pixman_region32_fini(&s->confine);
 	wlr_keyboard_finish(&s->keyboard);
 	if (s->xkb_context != NULL)
 		xkb_context_unref(s->xkb_context);

@@ -27,6 +27,8 @@ xdg_shell_xml = join_paths(wayland_protocols_dir, 'stable', 'xdg-shell', 'xdg-sh
 linux_dmabuf_xml = join_paths(wayland_protocols_dir, 'stable', 'linux-dmabuf', 'linux-dmabuf-v1.xml')
 cursor_shape_xml = join_paths(wayland_protocols_dir, 'staging', 'cursor-shape', 'cursor-shape-v1.xml')
 tablet_xml = join_paths(wayland_protocols_dir, 'unstable', 'tablet', 'tablet-unstable-v2.xml')
+pointer_constraints_xml = join_paths(wayland_protocols_dir, 'unstable', 'pointer-constraints', 'pointer-constraints-unstable-v1.xml')
+relative_pointer_xml = join_paths(wayland_protocols_dir, 'unstable', 'relative-pointer', 'relative-pointer-unstable-v1.xml')
 
 xdg_shell_header = custom_target(
   'xdg-shell client header',
@@ -77,12 +79,42 @@ tablet_code = custom_target(
   command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
 )
 
+pointer_constraints_header = custom_target(
+  'pointer-constraints client header',
+  input: pointer_constraints_xml,
+  output: 'pointer-constraints-unstable-v1-client-protocol.h',
+  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
+)
+
+pointer_constraints_code = custom_target(
+  'pointer-constraints private code',
+  input: pointer_constraints_xml,
+  output: 'pointer-constraints-unstable-v1-protocol.c',
+  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+)
+
+relative_pointer_header = custom_target(
+  'relative-pointer client header',
+  input: relative_pointer_xml,
+  output: 'relative-pointer-unstable-v1-client-protocol.h',
+  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
+)
+
+relative_pointer_code = custom_target(
+  'relative-pointer private code',
+  input: relative_pointer_xml,
+  output: 'relative-pointer-unstable-v1-protocol.c',
+  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+)
+
 protocol_lib = static_library(
   'dynscope-protocols',
   xdg_shell_code,
   linux_dmabuf_code,
   cursor_shape_code,
   tablet_code,
+  pointer_constraints_code,
+  relative_pointer_code,
   c_args: ['-w'],
 )
 
@@ -97,7 +129,9 @@ executable(
   xdg_shell_header,
   linux_dmabuf_header,
   cursor_shape_header,
-  dependencies: [wayland_client_dep, wayland_server_dep, glesv2_dep, xkbcommon_dep, wlroots_dep, dependency('xcb'), dependency('xcb-xfixes')],
+  pointer_constraints_header,
+  relative_pointer_header,
+  dependencies: [wayland_client_dep, wayland_server_dep, glesv2_dep, xkbcommon_dep, wlroots_dep, dependency('xcb'), dependency('xcb-xfixes'), dependency('pixman-1')],
   link_with: protocol_lib,
   include_directories: include_directories('src'),
 )

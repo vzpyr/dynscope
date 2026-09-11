@@ -1,6 +1,8 @@
 #ifndef HOST_H
 #define HOST_H
 
+#include <stdbool.h>
+
 struct dynscope;
 
 int host_open(struct dynscope *ds);
@@ -12,5 +14,6 @@ void host_request_frame(struct dynscope *ds);
 void host_set_cursor(struct dynscope *ds, const void *pixels, int width, int height, int hotspot_x, int hotspot_y);
 void host_apply_cursor(struct dynscope *ds);
 void host_set_cursor_hidden(struct dynscope *ds);
+void host_set_locked(struct dynscope *ds, bool locked);
 
 #endif
