@@ -228,7 +228,7 @@ void server_pointer_enter(struct dynscope *ds, double host_x, double host_y) {
 	struct wlr_surface *surface = NULL;
 	double x, y;
 	xwm_pick_surface(s, host_x, host_y, &surface, &x, &y);
-	dynscope_log_debug("dynscope: server pointer enter host=(%.0f,%.0f) surface=%p res=%u game=(%.1f,%.1f)\n", host_x, host_y, (void *)surface, surface != NULL ? wl_resource_get_id(surface->resource) : 0, x, y);
+	dynscope_log_debug("dynscope: server pointer enter host=(%.0f,%.0f) surface=%p res=%u game=(%.1f,%.1f)\n", host_x, host_y, (void *)surface, surface != NULL && surface->resource != NULL ? wl_resource_get_id(surface->resource) : 0, x, y);
 	if (surface == NULL)
 		return;
 	s->pointer_surface = surface;
@@ -332,7 +332,8 @@ void server_pointer_button(struct dynscope *ds, uint32_t time_msec, uint32_t but
 	struct server *s = ds->server;
 	if (s == NULL)
 		return;
-	dynscope_log_debug("dynscope: server button %u state=%u ptr_surface=%p\n", button, state, (void *)s->pointer_surface);
+	dynscope_log_debug("dynscope: pointer button %u state %u on surface %p at (%.1f, %.1f)\n",
+		button, state, (void *)s->pointer_surface, s->pointer_x, s->pointer_y);
 	if (s->pointer_surface == NULL)
 		return;
 	if (state == WL_POINTER_BUTTON_STATE_PRESSED)
