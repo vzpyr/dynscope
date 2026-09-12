@@ -22,8 +22,6 @@
 #include "viewporter-client-protocol.h"
 #include "xdg-decoration-unstable-v1-client-protocol.h"
 
-#define DEFAULT_WIDTH 1280
-#define DEFAULT_HEIGHT 720
 #define MAX_OUTSTANDING 4
 
 struct outstanding {

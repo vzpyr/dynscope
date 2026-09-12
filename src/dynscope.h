@@ -25,6 +25,9 @@ struct child {
 struct host;
 struct server;
 
+#define DEFAULT_WIDTH 2560
+#define DEFAULT_HEIGHT 1440
+
 struct frame_info {
 	int generation;
 	int fd;

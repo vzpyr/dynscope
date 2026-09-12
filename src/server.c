@@ -37,9 +37,6 @@
 #include "xcursor.h"
 #include "clipboard.h"
 
-#define DEFAULT_WIDTH 1280
-#define DEFAULT_HEIGHT 720
-
 struct wlr_egl_context {
 	EGLDisplay display;
 	EGLContext context;
@@ -141,12 +138,10 @@ static void server_update_fit(struct server *s, int width, int height) {
 		s->fit.scale = 1.0;
 		s->fit.x = 0.0;
 		s->fit.y = 0.0;
-		s->fit.w = 0;
-		s->fit.h = 0;
+		s->fit.w = width;
+		s->fit.h = height;
 		return;
 	}
-
-	server_update_output_mode(s, game_w, game_h);
 
 	double scale = (double)width / (double)game_w;
 	double scale_y = (double)height / (double)game_h;

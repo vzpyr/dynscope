@@ -15,6 +15,7 @@
 #include "host.h"
 #include "server.h"
 #include "xcursor.h"
+#include "xwm.h"
 
 #define XCURSOR_MAX 256
 
@@ -28,12 +29,10 @@ static void xcursor_clear_texture(struct xcursor *xc) {
 	xc->tex_h = 0;
 }
 
-static void xcursor_update_texture(struct xcursor *xc, xcb_xfixes_get_cursor_image_reply_t *img) {
+static void xcursor_update_texture(struct xcursor *xc, int w, int h, int xhot, int yhot, uint32_t *src) {
 	struct server *s = xc->server;
 
-	int w = img->width;
-	int h = img->height;
-	if (w <= 0 || h <= 0 || w > XCURSOR_MAX || h > XCURSOR_MAX) {
+	if (w <= 0 || h <= 0 || w > XCURSOR_MAX || h > XCURSOR_MAX || src == NULL) {
 		xcursor_clear_texture(xc);
 		return;
 	}
@@ -41,7 +40,6 @@ static void xcursor_update_texture(struct xcursor *xc, xcb_xfixes_get_cursor_ima
 	uint32_t *pixels = malloc((size_t)w * (size_t)h * 4);
 	if (pixels == NULL)
 		return;
-	uint32_t *src = xcb_xfixes_get_cursor_image_cursor_image(img);
 	bool any_visible = false;
 	for (int i = 0; i < w * h; i++) {
 		uint32_t argb = src[i];
@@ -79,8 +77,8 @@ static void xcursor_update_texture(struct xcursor *xc, xcb_xfixes_get_cursor_ima
 	xc->texture = tex;
 	xc->tex_w = w;
 	xc->tex_h = h;
-	xc->tex_hot_x = img->xhot;
-	xc->tex_hot_y = img->yhot;
+	xc->tex_hot_x = xhot;
+	xc->tex_hot_y = yhot;
 	xc->tex_valid = true;
 	s->cursor_image_empty = false;
 
@@ -115,8 +113,8 @@ static void xcursor_update_texture(struct xcursor *xc, xcb_xfixes_get_cursor_ima
 	}
 	free(pixels);
 
-	int hx = (int)((double)img->xhot * scale + 0.5);
-	int hy = (int)((double)img->yhot * scale + 0.5);
+	int hx = (int)((double)xhot * scale + 0.5);
+	int hy = (int)((double)yhot * scale + 0.5);
 	if (hx >= out_w)
 		hx = out_w - 1;
 	if (hy >= out_h)
@@ -125,7 +123,7 @@ static void xcursor_update_texture(struct xcursor *xc, xcb_xfixes_get_cursor_ima
 	free(scaled);
 	server_update_lock(s);
 
-	dynscope_log_debug("dynscope: game cursor %dx%d hotspot=%d,%d scale=%.2f\n", w, h, img->xhot, img->yhot, scale);
+	dynscope_log_debug("dynscope: game cursor %dx%d hotspot=%d,%d scale=%.2f\n", w, h, xhot, yhot, scale);
 }
 
 void xcursor_refresh(struct server *server) {
@@ -133,16 +131,42 @@ void xcursor_refresh(struct server *server) {
 	if (xc == NULL || xc->conn == NULL)
 		return;
 
-	xcb_xfixes_get_cursor_image_cookie_t cookie = xcb_xfixes_get_cursor_image_unchecked(xc->conn);
+	struct wlr_surface *focus = xwm_focus_surface(server);
+	if (focus == NULL || !focus->mapped) {
+		xcursor_clear_texture(xc);
+		host_set_cursor(server->ds, NULL, 0, 0, 0, 0);
+		return;
+	}
+
+	xcb_xfixes_get_cursor_image_and_name_cookie_t cookie = xcb_xfixes_get_cursor_image_and_name_unchecked(xc->conn);
 	xcb_generic_error_t *error = NULL;
-	xcb_xfixes_get_cursor_image_reply_t *img = xcb_xfixes_get_cursor_image_reply(xc->conn, cookie, &error);
+	xcb_xfixes_get_cursor_image_and_name_reply_t *img = xcb_xfixes_get_cursor_image_and_name_reply(xc->conn, cookie, &error);
 	if (error != NULL) {
 		free(error);
 		return;
 	}
 	if (img == NULL)
 		return;
-	xcursor_update_texture(xc, img);
+
+	if (img->nbytes > 0) {
+		char *name = xcb_xfixes_get_cursor_image_and_name_name(img);
+		if (name != NULL && (strncmp(name, "X_cursor", img->nbytes) == 0 || strncmp(name, "root", img->nbytes) == 0 || strncmp(name, "left_ptr", img->nbytes) == 0 || strncmp(name, "default", img->nbytes) == 0)) {
+			xcursor_clear_texture(xc);
+			host_set_cursor(server->ds, NULL, 0, 0, 0, 0);
+			free(img);
+			return;
+		}
+	}
+
+	if (img->width == 16 && img->height == 16 && img->xhot == 8 && img->yhot == 8) {
+		xcursor_clear_texture(xc);
+		host_set_cursor(server->ds, NULL, 0, 0, 0, 0);
+		free(img);
+		return;
+	}
+
+	uint32_t *src = xcb_xfixes_get_cursor_image_and_name_cursor_image(img);
+	xcursor_update_texture(xc, (int)img->width, (int)img->height, (int)img->xhot, (int)img->yhot, src);
 	free(img);
 }
 
@@ -230,7 +254,6 @@ int xcursor_init(struct server *server) {
 		return -1;
 	}
 
-	xcursor_refresh(server);
 	return 0;
 }
 
