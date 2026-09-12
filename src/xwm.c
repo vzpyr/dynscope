@@ -76,7 +76,7 @@ static struct wlr_xwayland_surface *pick_focus(struct xwm *xwm) {
 
 	wl_list_for_each_reverse(win, &xwm->windows, link) {
 		struct wlr_xwayland_surface *xs = win->xs;
-		if (xs->override_redirect)
+		if (xs->override_redirect || xs->surface == NULL)
 			continue;
 		return xs;
 	}
@@ -84,7 +84,7 @@ static struct wlr_xwayland_surface *pick_focus(struct xwm *xwm) {
 }
 
 static struct wlr_xwayland_surface *xwm_focus_window(struct xwm *xwm) {
-	if (xwm->focus != NULL && !xwm->focus->override_redirect)
+	if (xwm->focus != NULL && !xwm->focus->override_redirect && xwm->focus->surface != NULL && xwm->focus->surface->mapped)
 		return xwm->focus;
 	return pick_focus(xwm);
 }
@@ -274,6 +274,9 @@ static void handle_new_surface(struct wl_listener *listener, void *data) {
 }
 
 static void draw_surface_tree(struct wlr_render_pass *pass, struct wlr_surface *surface, double base_x, double base_y, double scale, struct wlr_surface **drawn, int *ndrawn) {
+	if (surface == NULL)
+		return;
+
 	struct wlr_subsurface *sub;
 	wl_list_for_each(sub, &surface->current.subsurfaces_below, current.link) {
 		double sx = base_x + (double)sub->current.x * scale;
@@ -338,7 +341,7 @@ void xwm_game_size(struct server *server, int *width, int *height) {
 
 	int w = 0;
 	int h = 0;
-	if (wlr_surface_has_buffer(focus->surface)) {
+	if (focus->surface != NULL && wlr_surface_has_buffer(focus->surface)) {
 		struct wlr_fbox src;
 		wlr_surface_get_buffer_source_box(focus->surface, &src);
 		w = (int)src.width;
@@ -407,6 +410,8 @@ void xwm_pick_surface(struct server *server, double host_x, double host_y, struc
 		return;
 
 	struct wlr_xwayland_surface *focus = xwm_focus_window(xwm);
+	if (focus == NULL || focus->surface == NULL || !focus->surface->mapped)
+		focus = pick_focus(xwm);
 	if (focus == NULL || focus->surface == NULL || !focus->surface->mapped)
 		return;
 
