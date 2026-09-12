@@ -20,6 +20,7 @@
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_pointer_constraints_v1.h>
+#include <wlr/types/wlr_primary_selection_v1.h>
 #include <wlr/types/wlr_relative_pointer_v1.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_subcompositor.h>
@@ -34,6 +35,7 @@
 #include "server.h"
 #include "xwm.h"
 #include "xcursor.h"
+#include "clipboard.h"
 
 #define DEFAULT_WIDTH 1280
 #define DEFAULT_HEIGHT 720
@@ -564,6 +566,7 @@ static void handle_xwayland_ready(struct wl_listener *listener, void *data) {
 	(void)listener;
 	(void)data;
 	struct server *s = wl_container_of(listener, s, xwayland_ready);
+	clipboard_init(s);
 	xcursor_init(s);
 	xcursor_refresh(s);
 }
@@ -668,6 +671,10 @@ int server_init(struct dynscope *ds) {
 	wlr_seat_set_keyboard(s->seat, &s->keyboard);
 
 	s->data_device = wlr_data_device_manager_create(s->display);
+	if (wlr_primary_selection_v1_device_manager_create(s->display) == NULL) {
+		fprintf(stderr, "dynscope: failed to create primary selection manager\n");
+		goto fail;
+	}
 
 	s->constraints = wlr_pointer_constraints_v1_create(s->display);
 	if (s->constraints == NULL) {
@@ -738,6 +745,7 @@ void server_finish(struct dynscope *ds) {
 
 	xwm_finish(s);
 	xcursor_finish(s);
+	clipboard_finish(s);
 	wl_list_remove(&s->new_constraint.link);
 	if (s->xwayland != NULL) {
 		wl_list_remove(&s->xwayland_destroy.link);

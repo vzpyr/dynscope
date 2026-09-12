@@ -29,6 +29,7 @@ cursor_shape_xml = join_paths(wayland_protocols_dir, 'staging', 'cursor-shape', 
 tablet_xml = join_paths(wayland_protocols_dir, 'unstable', 'tablet', 'tablet-unstable-v2.xml')
 pointer_constraints_xml = join_paths(wayland_protocols_dir, 'unstable', 'pointer-constraints', 'pointer-constraints-unstable-v1.xml')
 relative_pointer_xml = join_paths(wayland_protocols_dir, 'unstable', 'relative-pointer', 'relative-pointer-unstable-v1.xml')
+primary_selection_xml = join_paths(wayland_protocols_dir, 'unstable', 'primary-selection', 'primary-selection-unstable-v1.xml')
 
 xdg_shell_header = custom_target(
   'xdg-shell client header',
@@ -107,6 +108,20 @@ relative_pointer_code = custom_target(
   command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
 )
 
+primary_selection_header = custom_target(
+  'primary-selection client header',
+  input: primary_selection_xml,
+  output: 'primary-selection-unstable-v1-client-protocol.h',
+  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
+)
+
+primary_selection_code = custom_target(
+  'primary-selection private code',
+  input: primary_selection_xml,
+  output: 'primary-selection-unstable-v1-protocol.c',
+  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+)
+
 protocol_lib = static_library(
   'dynscope-protocols',
   xdg_shell_code,
@@ -115,6 +130,7 @@ protocol_lib = static_library(
   tablet_code,
   pointer_constraints_code,
   relative_pointer_code,
+  primary_selection_code,
   c_args: ['-w'],
 )
 
@@ -126,11 +142,13 @@ executable(
   'src/server.c',
   'src/xwm.c',
   'src/xcursor.c',
+  'src/clipboard.c',
   xdg_shell_header,
   linux_dmabuf_header,
   cursor_shape_header,
   pointer_constraints_header,
   relative_pointer_header,
+  primary_selection_header,
   dependencies: [wayland_client_dep, wayland_server_dep, glesv2_dep, xkbcommon_dep, wlroots_dep, dependency('xcb'), dependency('xcb-xfixes'), dependency('pixman-1')],
   link_with: protocol_lib,
   include_directories: include_directories('src'),

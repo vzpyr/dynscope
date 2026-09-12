@@ -2,6 +2,7 @@
 #define HOST_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 struct dynscope;
 
@@ -15,5 +16,6 @@ void host_set_cursor(struct dynscope *ds, const void *pixels, int width, int hei
 void host_apply_cursor(struct dynscope *ds);
 void host_set_cursor_hidden(struct dynscope *ds);
 void host_set_locked(struct dynscope *ds, bool locked);
+void host_set_selection(struct dynscope *ds, bool primary, const char *data, size_t len);
 
 #endif

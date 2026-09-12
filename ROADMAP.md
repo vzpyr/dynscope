@@ -179,10 +179,11 @@ error handler; our test client does the same.
 Exit criteria: camera games behave exactly like nested gamescope. Verified on Hyprland (user confirmed): both client styles lock/unlock correctly; the lock rule fires exactly on (game cursor hidden && active constraint) per steamcompmgr.cpp:10402. Key mechanisms: XWayland translates X11 grabs into wp_pointer_constraints lock/confine requests and XWarpPointer into cursor-position hints; dynscope activates the constraint on keyboard focus (gamescope wlserver_constrain_cursor), evaluates the lock rule on every constraint/cursor state change, and forwards host unaccelerated relative deltas into the seat with wlr_region_confine clamping for the confined case.
 
 ### Phase 5 — Clipboard and primary selection
-- [ ] game → host: X selection change → data source / primary source to host
-- [ ] host → game: wl_data_device offer → seat selection → xwm bridges to X
-- [ ] verify both directions against the host DE clipboard
-Exit criteria: copy/paste works both ways, clipboard + primary.
+- [x] game → host: X selection change → data source / primary source to host
+- [x] host → game: wl_data_device offer → seat selection → xwm bridges to X
+- [x] verify both directions against the host DE clipboard
+Exit criteria: copy/paste works both ways, clipboard + primary. Verified on Hyprland (user confirmed): bidirectional clipboard and primary selection synchronization confirmed with automated protocol testing and interactive live kitty session. Key mechanisms: wlroots xwm bridges X11 selections to wlr_seat request_set_selection and request_set_primary_selection; dynscope sets the seat selection and reads payloads to forward via wl_data_source and zwp_primary_selection_source_v1 to the host Wayland compositor; in reverse, host selection offers are read asynchronously and pushed into wlr_seat via server_host_selection with recursion suppression.
+
 
 ### Phase 6 — Polish and release
 - [ ] fractional-scale + wp_viewport on the parent, HiDPI-correct cursors

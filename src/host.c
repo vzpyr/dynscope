@@ -17,6 +17,7 @@
 #include "cursor-shape-v1-client-protocol.h"
 #include "pointer-constraints-unstable-v1-client-protocol.h"
 #include "relative-pointer-unstable-v1-client-protocol.h"
+#include "primary-selection-unstable-v1-client-protocol.h"
 
 #define DEFAULT_WIDTH 1280
 #define DEFAULT_HEIGHT 720
@@ -45,6 +46,19 @@ struct pending_axis {
 	uint32_t axis;
 };
 
+struct host_read {
+	struct host *host;
+	bool primary;
+	int fd;
+	struct wl_data_offer *offer;
+	struct zwp_primary_selection_offer_v1 *primary_offer;
+	char *buf;
+	size_t len;
+	size_t cap;
+	bool dead;
+	struct wl_event_source *src;
+};
+
 struct host {
 	struct wl_display *display;
 	struct wl_registry *registry;
@@ -70,6 +84,22 @@ struct host {
 	struct wl_buffer *cursor_buffer;
 
 	struct wl_keyboard *keyboard;
+	struct wl_data_device_manager *data_device_manager;
+	struct wl_data_device *data_device;
+	struct wl_data_source *clipboard_source;
+	struct zwp_primary_selection_device_manager_v1 *primary_manager;
+	struct zwp_primary_selection_device_v1 *primary_device;
+	struct zwp_primary_selection_source_v1 *primary_source;
+	char *clip_data;
+	size_t clip_len;
+	char *primary_data;
+	size_t primary_len;
+	struct host_read read_clip;
+	struct host_read read_primary;
+	struct host_offer *pending_clip_offer;
+	struct host_offer *pending_primary_offer;
+	uint32_t keyboard_enter_serial;
+	uint32_t last_event_serial;
 	struct wl_array outstanding;
 	struct host_cursor cursor;
 	struct pending_axis pending_axis;
@@ -99,6 +129,12 @@ static const struct wl_pointer_listener pointer_listener;
 static const struct wl_buffer_listener buffer_listener;
 static const struct zwp_locked_pointer_v1_listener locked_pointer_listener;
 static const struct zwp_relative_pointer_v1_listener relative_pointer_listener;
+static const struct wl_data_device_listener data_device_listener;
+static const struct wl_data_offer_listener data_offer_listener;
+static const struct wl_data_source_listener data_source_listener;
+static const struct zwp_primary_selection_device_v1_listener primary_device_listener;
+static const struct zwp_primary_selection_offer_v1_listener primary_offer_listener;
+static const struct zwp_primary_selection_source_v1_listener primary_source_listener;
 
 static void host_apply_cursor_impl(struct host *host);
 
@@ -121,6 +157,10 @@ static void registry_handle_global(void *data, struct wl_registry *registry, uin
 		host->pointer_constraints = wl_registry_bind(registry, name, &zwp_pointer_constraints_v1_interface, version < 1u ? version : 1u);
 	else if (strcmp(interface, zwp_relative_pointer_manager_v1_interface.name) == 0)
 		host->relative_pointer_manager = wl_registry_bind(registry, name, &zwp_relative_pointer_manager_v1_interface, version < 1u ? version : 1u);
+	else if (strcmp(interface, wl_data_device_manager_interface.name) == 0)
+		host->data_device_manager = wl_registry_bind(registry, name, &wl_data_device_manager_interface, version < (uint32_t)wl_data_device_manager_interface.version ? version : (uint32_t)wl_data_device_manager_interface.version);
+	else if (strcmp(interface, zwp_primary_selection_device_manager_v1_interface.name) == 0)
+		host->primary_manager = wl_registry_bind(registry, name, &zwp_primary_selection_device_manager_v1_interface, version < 1u ? version : 1u);
 }
 
 static void registry_handle_global_remove(void *data, struct wl_registry *registry, uint32_t name) {
@@ -348,10 +388,11 @@ static void keyboard_handle_keymap(void *data, struct wl_keyboard *keyboard, uin
 static void keyboard_handle_enter(void *data, struct wl_keyboard *keyboard, uint32_t serial, struct wl_surface *surface, struct wl_array *keys) {
 	struct host *host = data;
 	(void)keyboard;
-	(void)serial;
 	(void)surface;
 	(void)keys;
 	host->keyboard_entered = true;
+	host->keyboard_enter_serial = serial;
+	host->last_event_serial = serial;
 	server_keyboard_focus(host->ds, true);
 	host_apply_cursor_impl(host);
 }
@@ -369,8 +410,8 @@ static void keyboard_handle_leave(void *data, struct wl_keyboard *keyboard, uint
 static void keyboard_handle_key(void *data, struct wl_keyboard *keyboard, uint32_t serial, uint32_t time, uint32_t key, uint32_t state) {
 	struct host *host = data;
 	(void)keyboard;
-	(void)serial;
 	(void)time;
+	host->last_event_serial = serial;
 	server_keyboard_key(host->ds, key, state == WL_KEYBOARD_KEY_STATE_PRESSED);
 }
 
@@ -402,6 +443,7 @@ static void pointer_handle_enter(void *data, struct wl_pointer *pointer, uint32_
 	(void)pointer;
 	(void)surface;
 	host->pointer_enter_serial = serial;
+	host->last_event_serial = serial;
 	double x = wl_fixed_to_double(sx);
 	double y = wl_fixed_to_double(sy);
 	server_pointer_enter(host->ds, x, y);
@@ -428,7 +470,8 @@ static void pointer_handle_motion(void *data, struct wl_pointer *pointer, uint32
 static void pointer_handle_button(void *data, struct wl_pointer *pointer, uint32_t serial, uint32_t time, uint32_t button, uint32_t state) {
 	struct host *host = data;
 	(void)pointer;
-	(void)serial;
+	(void)time;
+	host->last_event_serial = serial;
 	if (getenv("DYNSCOPE_DEBUG") != NULL)
 		fprintf(stderr, "dynscope: host button %u state=%u\n", button, state);
 	server_pointer_button(host->ds, time, button, state);
@@ -629,6 +672,407 @@ static void host_apply_cursor_impl(struct host *host) {
 	wl_pointer_set_cursor(host->pointer, host->pointer_enter_serial, host->cursor_surface, cursor->hotspot_x, cursor->hotspot_y);
 }
 
+struct host_offer {
+	struct host *host;
+	struct wl_data_offer *offer;
+	struct zwp_primary_selection_offer_v1 *primary_offer;
+	bool primary;
+	bool have_utf8;
+	bool have_text;
+};
+
+static void data_offer_handle_offer(void *data, struct wl_data_offer *offer, const char *mime_type) {
+	struct host_offer *ho = data;
+	(void)offer;
+	if (strcmp(mime_type, "text/plain;charset=utf-8") == 0)
+		ho->have_utf8 = true;
+	else if (strcmp(mime_type, "text/plain") == 0)
+		ho->have_text = true;
+}
+
+static void data_offer_handle_source_actions(void *data, struct wl_data_offer *offer, uint32_t source_actions) {
+	(void)data;
+	(void)offer;
+	(void)source_actions;
+}
+
+static void data_offer_handle_action(void *data, struct wl_data_offer *offer, uint32_t dnd_action) {
+	(void)data;
+	(void)offer;
+	(void)dnd_action;
+}
+
+static const struct wl_data_offer_listener data_offer_listener = {
+	.offer = data_offer_handle_offer,
+	.source_actions = data_offer_handle_source_actions,
+	.action = data_offer_handle_action,
+};
+
+static void primary_offer_handle_offer(void *data, struct zwp_primary_selection_offer_v1 *offer, const char *mime_type) {
+	struct host_offer *ho = data;
+	(void)offer;
+	if (strcmp(mime_type, "text/plain;charset=utf-8") == 0)
+		ho->have_utf8 = true;
+	else if (strcmp(mime_type, "text/plain") == 0)
+		ho->have_text = true;
+}
+
+static const struct zwp_primary_selection_offer_v1_listener primary_offer_listener = {
+	.offer = primary_offer_handle_offer,
+};
+
+static void host_data_set(char **data, size_t *len, const char *src, size_t src_len) {
+	free(*data);
+	*data = NULL;
+	*len = 0;
+	if (src_len == 0)
+		return;
+	char *copy = malloc(src_len + 1);
+	if (copy == NULL)
+		return;
+	memcpy(copy, src, src_len);
+	copy[src_len] = '\0';
+	*data = copy;
+	*len = src_len;
+}
+
+static void host_read_finish(struct host_read *read) {
+	if (read->dead)
+		return;
+	read->dead = true;
+	if (read->src != NULL) {
+		wl_event_source_remove(read->src);
+		read->src = NULL;
+	}
+	close(read->fd);
+	read->fd = -1;
+	if (read->offer != NULL)
+		wl_data_offer_destroy(read->offer);
+	if (read->primary_offer != NULL)
+		zwp_primary_selection_offer_v1_destroy(read->primary_offer);
+	read->offer = NULL;
+	read->primary_offer = NULL;
+	struct host *host = read->host;
+	char *data = read->buf;
+	size_t len = read->len;
+	read->buf = NULL;
+	read->len = 0;
+	read->cap = 0;
+	bool primary = read->primary;
+	if (data != NULL && len > 0)
+		server_host_selection(host->ds, primary, data, len);
+	free(data);
+}
+
+static int host_read_event(int fd, uint32_t mask, void *data) {
+	struct host_read *r = data;
+	(void)fd;
+	if (r->dead)
+		return 0;
+	if ((mask & WL_EVENT_READABLE) == 0) {
+		if ((mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)) != 0)
+			host_read_finish(r);
+		return 0;
+	}
+	while (true) {
+		if (r->len + 4096 > r->cap) {
+			size_t new_cap = r->cap == 0 ? 4096 : r->cap * 2;
+			char *new_buf = realloc(r->buf, new_cap);
+			if (new_buf == NULL)
+				break;
+			r->buf = new_buf;
+			r->cap = new_cap;
+		}
+		ssize_t n = read(r->fd, r->buf + r->len, 4096);
+		if (n > 0) {
+			r->len += (size_t)n;
+			continue;
+		}
+		if (n < 0 && (errno == EAGAIN || errno == EINTR))
+			return 1;
+		host_read_finish(r);
+		return 0;
+	}
+	return 1;
+}
+
+static void host_selection_read(struct host *host, struct host_offer *ho) {
+	const char *mime = ho->have_utf8 ? "text/plain;charset=utf-8" : (ho->have_text ? "text/plain" : NULL);
+	if (mime == NULL) {
+		if (ho->primary && ho->primary_offer != NULL)
+			zwp_primary_selection_offer_v1_destroy(ho->primary_offer);
+		else if (!ho->primary && ho->offer != NULL)
+			wl_data_offer_destroy(ho->offer);
+		return;
+	}
+	int fds[2];
+	if (pipe(fds) < 0) {
+		if (ho->primary && ho->primary_offer != NULL)
+			zwp_primary_selection_offer_v1_destroy(ho->primary_offer);
+		else if (!ho->primary && ho->offer != NULL)
+			wl_data_offer_destroy(ho->offer);
+		return;
+	}
+	struct host_read *read = ho->primary ? &host->read_primary : &host->read_clip;
+	if (read->src != NULL || read->buf != NULL) {
+		close(fds[0]);
+		close(fds[1]);
+		if (ho->primary && ho->primary_offer != NULL)
+			zwp_primary_selection_offer_v1_destroy(ho->primary_offer);
+		else if (!ho->primary && ho->offer != NULL)
+			wl_data_offer_destroy(ho->offer);
+		return;
+	}
+	if (ho->primary)
+		zwp_primary_selection_offer_v1_receive(ho->primary_offer, mime, fds[1]);
+	else
+		wl_data_offer_receive(ho->offer, mime, fds[1]);
+	wl_display_flush(host->display);
+	close(fds[1]);
+	read->host = host;
+	read->primary = ho->primary;
+	read->fd = fds[0];
+	read->offer = ho->offer;
+	read->primary_offer = ho->primary_offer;
+	read->buf = NULL;
+	read->len = 0;
+	read->cap = 0;
+	read->dead = false;
+	int flags = fcntl(fds[0], F_GETFL);
+	if (flags >= 0)
+		fcntl(fds[0], F_SETFL, flags | O_NONBLOCK);
+	read->src = wl_event_loop_add_fd(host->ds->loop, fds[0], WL_EVENT_READABLE, host_read_event, read);
+	if (read->src == NULL)
+		close(fds[0]);
+}
+
+static void data_device_handle_data_offer(void *data, struct wl_data_device *device, struct wl_data_offer *offer) {
+	struct host *host = data;
+	(void)device;
+	if (host->pending_clip_offer != NULL) {
+		wl_data_offer_destroy(host->pending_clip_offer->offer);
+		free(host->pending_clip_offer);
+		host->pending_clip_offer = NULL;
+	}
+	struct host_offer *ho = calloc(1, sizeof(*ho));
+	if (ho == NULL) {
+		wl_data_offer_destroy(offer);
+		return;
+	}
+	ho->host = host;
+	ho->offer = offer;
+	wl_data_offer_add_listener(offer, &data_offer_listener, ho);
+	host->pending_clip_offer = ho;
+}
+
+static void data_device_handle_enter(void *data, struct wl_data_device *device, uint32_t serial, struct wl_surface *surface, wl_fixed_t x, wl_fixed_t y, struct wl_data_offer *offer) {
+	(void)data;
+	(void)device;
+	(void)serial;
+	(void)surface;
+	(void)x;
+	(void)y;
+	if (offer != NULL)
+		wl_data_offer_destroy(offer);
+}
+
+static void data_device_handle_leave(void *data, struct wl_data_device *device) {
+	(void)data;
+	(void)device;
+}
+
+static void data_device_handle_motion(void *data, struct wl_data_device *device, uint32_t time, wl_fixed_t x, wl_fixed_t y) {
+	(void)data;
+	(void)device;
+	(void)time;
+	(void)x;
+	(void)y;
+}
+
+static void data_device_handle_drop(void *data, struct wl_data_device *device) {
+	(void)data;
+	(void)device;
+}
+
+static void data_device_handle_selection(void *data, struct wl_data_device *device, struct wl_data_offer *offer) {
+	struct host *host = data;
+	(void)device;
+	struct host_offer *ho = host->pending_clip_offer;
+	host->pending_clip_offer = NULL;
+	if (offer == NULL || ho == NULL || ho->offer != offer) {
+		if (offer != NULL)
+			wl_data_offer_destroy(offer);
+		free(ho);
+		return;
+	}
+	host_selection_read(host, ho);
+	free(ho);
+}
+
+static const struct wl_data_device_listener data_device_listener = {
+	.data_offer = data_device_handle_data_offer,
+	.enter = data_device_handle_enter,
+	.leave = data_device_handle_leave,
+	.motion = data_device_handle_motion,
+	.drop = data_device_handle_drop,
+	.selection = data_device_handle_selection,
+};
+
+static void primary_device_handle_data_offer(void *data, struct zwp_primary_selection_device_v1 *device, struct zwp_primary_selection_offer_v1 *offer) {
+	struct host *host = data;
+	(void)device;
+	if (host->pending_primary_offer != NULL) {
+		zwp_primary_selection_offer_v1_destroy(host->pending_primary_offer->primary_offer);
+		free(host->pending_primary_offer);
+		host->pending_primary_offer = NULL;
+	}
+	struct host_offer *ho = calloc(1, sizeof(*ho));
+	if (ho == NULL) {
+		zwp_primary_selection_offer_v1_destroy(offer);
+		return;
+	}
+	ho->host = host;
+	ho->primary = true;
+	ho->primary_offer = offer;
+	zwp_primary_selection_offer_v1_add_listener(offer, &primary_offer_listener, ho);
+	host->pending_primary_offer = ho;
+}
+
+static void primary_device_handle_selection(void *data, struct zwp_primary_selection_device_v1 *device, struct zwp_primary_selection_offer_v1 *offer) {
+	struct host *host = data;
+	(void)device;
+	struct host_offer *ho = host->pending_primary_offer;
+	host->pending_primary_offer = NULL;
+	if (offer == NULL || ho == NULL || ho->primary_offer != offer) {
+		if (offer != NULL)
+			zwp_primary_selection_offer_v1_destroy(offer);
+		free(ho);
+		return;
+	}
+	host_selection_read(host, ho);
+	free(ho);
+}
+
+static const struct zwp_primary_selection_device_v1_listener primary_device_listener = {
+	.data_offer = primary_device_handle_data_offer,
+	.selection = primary_device_handle_selection,
+};
+
+static void data_source_handle_target(void *data, struct wl_data_source *source, const char *mime_type) {
+	(void)data;
+	(void)source;
+	(void)mime_type;
+}
+
+static void data_source_handle_send(void *data, struct wl_data_source *source, const char *mime_type, int32_t fd) {
+	struct host *host = data;
+	(void)source;
+	(void)mime_type;
+	if (host->clip_data == NULL || write(fd, host->clip_data, host->clip_len) != (ssize_t)host->clip_len)
+		fprintf(stderr, "dynscope: failed to write clipboard data\n");
+	close(fd);
+}
+
+static void data_source_handle_cancelled(void *data, struct wl_data_source *source) {
+	struct host *host = data;
+	(void)source;
+	if (host->clipboard_source == source)
+		host->clipboard_source = NULL;
+	wl_data_source_destroy(source);
+}
+
+static void data_source_handle_dnd_drop_performed(void *data, struct wl_data_source *source) {
+	(void)data;
+	(void)source;
+}
+
+static void data_source_handle_dnd_finished(void *data, struct wl_data_source *source) {
+	(void)data;
+	(void)source;
+}
+
+static void data_source_handle_action(void *data, struct wl_data_source *source, uint32_t dnd_action) {
+	(void)data;
+	(void)source;
+	(void)dnd_action;
+}
+
+static const struct wl_data_source_listener data_source_listener = {
+	.target = data_source_handle_target,
+	.send = data_source_handle_send,
+	.cancelled = data_source_handle_cancelled,
+	.dnd_drop_performed = data_source_handle_dnd_drop_performed,
+	.dnd_finished = data_source_handle_dnd_finished,
+	.action = data_source_handle_action,
+};
+
+static void primary_source_handle_send(void *data, struct zwp_primary_selection_source_v1 *source, const char *mime_type, int32_t fd) {
+	struct host *host = data;
+	(void)source;
+	(void)mime_type;
+	if (host->primary_data == NULL || write(fd, host->primary_data, host->primary_len) != (ssize_t)host->primary_len)
+		fprintf(stderr, "dynscope: failed to write primary selection data\n");
+	close(fd);
+}
+
+static void primary_source_handle_cancelled(void *data, struct zwp_primary_selection_source_v1 *source) {
+	struct host *host = data;
+	(void)source;
+	if (host->primary_source == source)
+		host->primary_source = NULL;
+	zwp_primary_selection_source_v1_destroy(source);
+}
+
+static const struct zwp_primary_selection_source_v1_listener primary_source_listener = {
+	.send = primary_source_handle_send,
+	.cancelled = primary_source_handle_cancelled,
+};
+
+void host_set_selection(struct dynscope *ds, bool primary, const char *data, size_t len) {
+	struct host *host = ds->host;
+	if (host == NULL)
+		return;
+	uint32_t serial = host->last_event_serial;
+	if (serial == 0)
+		serial = host->keyboard_enter_serial;
+	if (serial == 0)
+		serial = host->pointer_enter_serial;
+	if (primary) {
+		host_data_set(&host->primary_data, &host->primary_len, data, len);
+		if (host->primary_device == NULL || host->primary_manager == NULL)
+			return;
+		if (host->primary_source != NULL) {
+			zwp_primary_selection_source_v1_destroy(host->primary_source);
+			host->primary_source = NULL;
+		}
+		struct zwp_primary_selection_source_v1 *source = zwp_primary_selection_device_manager_v1_create_source(host->primary_manager);
+		if (source == NULL)
+			return;
+		zwp_primary_selection_source_v1_add_listener(source, &primary_source_listener, host);
+		zwp_primary_selection_source_v1_offer(source, "text/plain;charset=utf-8");
+		zwp_primary_selection_source_v1_offer(source, "text/plain");
+		host->primary_source = source;
+		zwp_primary_selection_device_v1_set_selection(host->primary_device, source, serial);
+	} else {
+		host_data_set(&host->clip_data, &host->clip_len, data, len);
+		if (host->data_device == NULL || host->data_device_manager == NULL)
+			return;
+		if (host->clipboard_source != NULL) {
+			wl_data_source_destroy(host->clipboard_source);
+			host->clipboard_source = NULL;
+		}
+		struct wl_data_source *source = wl_data_device_manager_create_data_source(host->data_device_manager);
+		if (source == NULL)
+			return;
+		wl_data_source_add_listener(source, &data_source_listener, host);
+		wl_data_source_offer(source, "text/plain;charset=utf-8");
+		wl_data_source_offer(source, "text/plain");
+		host->clipboard_source = source;
+		wl_data_device_set_selection(host->data_device, source, serial);
+	}
+	wl_display_flush(host->display);
+}
+
 static void host_frame_idle(void *data) {
 	struct host *host = data;
 	host_present(host);
@@ -807,6 +1251,15 @@ int host_open(struct dynscope *ds) {
 
 	wl_seat_add_listener(host->seat, &seat_listener, host);
 
+	if (host->data_device_manager != NULL) {
+		host->data_device = wl_data_device_manager_get_data_device(host->data_device_manager, host->seat);
+		wl_data_device_add_listener(host->data_device, &data_device_listener, host);
+	}
+	if (host->primary_manager != NULL) {
+		host->primary_device = zwp_primary_selection_device_manager_v1_get_device(host->primary_manager, host->seat);
+		zwp_primary_selection_device_v1_add_listener(host->primary_device, &primary_device_listener, host);
+	}
+
 	wl_surface_commit(host->surface);
 
 	host->fd_src = wl_event_loop_add_fd(ds->loop, wl_display_get_fd(host->display), WL_EVENT_READABLE, host_fd_event, host);
@@ -838,6 +1291,36 @@ void host_close(struct dynscope *ds) {
 		wl_event_source_remove(host->fd_src);
 	if (host->flush_src != NULL)
 		wl_event_source_remove(host->flush_src);
+	for (int i = 0; i < 2; i++) {
+		struct host_read *read = i == 0 ? &host->read_clip : &host->read_primary;
+		if (read->src != NULL)
+			wl_event_source_remove(read->src);
+		if (read->fd >= 0)
+			close(read->fd);
+		free(read->buf);
+	}
+	if (host->pending_clip_offer != NULL) {
+		wl_data_offer_destroy(host->pending_clip_offer->offer);
+		free(host->pending_clip_offer);
+	}
+	if (host->pending_primary_offer != NULL) {
+		zwp_primary_selection_offer_v1_destroy(host->pending_primary_offer->primary_offer);
+		free(host->pending_primary_offer);
+	}
+	if (host->clipboard_source != NULL)
+		wl_data_source_destroy(host->clipboard_source);
+	if (host->primary_source != NULL)
+		zwp_primary_selection_source_v1_destroy(host->primary_source);
+	if (host->data_device != NULL)
+		wl_data_device_release(host->data_device);
+	if (host->primary_device != NULL)
+		zwp_primary_selection_device_v1_destroy(host->primary_device);
+	if (host->data_device_manager != NULL)
+		wl_data_device_manager_destroy(host->data_device_manager);
+	if (host->primary_manager != NULL)
+		zwp_primary_selection_device_manager_v1_destroy(host->primary_manager);
+	free(host->clip_data);
+	free(host->primary_data);
 	if (host->keyboard != NULL)
 		wl_keyboard_destroy(host->keyboard);
 	if (host->pointer != NULL)

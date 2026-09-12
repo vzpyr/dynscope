@@ -22,6 +22,7 @@
 #include "dynscope.h"
 
 struct dynscope;
+struct clipboard;
 
 #define FRAME_POOL_MAX 4
 
@@ -90,6 +91,7 @@ struct server {
 	struct wlr_keyboard keyboard;
 	struct xwm *xwm;
 	struct xcursor *xcursor;
+	struct clipboard *clipboard;
 	struct wlr_pointer_constraints_v1 *constraints;
 	struct wlr_relative_pointer_manager_v1 *relative_pointer;
 	struct wl_listener new_constraint;
@@ -130,5 +132,7 @@ void server_update_lock(struct server *server);
 void server_keyboard_keymap(struct dynscope *ds, const char *keymap_string);
 void server_keyboard_key(struct dynscope *ds, uint32_t key, bool pressed);
 void server_keyboard_modifiers(struct dynscope *ds, uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group);
+
+void server_host_selection(struct dynscope *ds, bool primary, const char *data, size_t len);
 
 #endif

@@ -70,6 +70,7 @@ static void supervisor_run(int pid_fd, int status_fd, char **argv, const char *d
 			setenv("DISPLAY", display, 1);
 		else
 			unsetenv("DISPLAY");
+		unsetenv("WAYLAND_DISPLAY");
 		execvp(argv[0], argv);
 		_exit(127);
 	}
