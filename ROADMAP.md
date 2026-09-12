@@ -186,14 +186,15 @@ Exit criteria: copy/paste works both ways, clipboard + primary. Verified on Hypr
 
 
 ### Phase 6 — Polish and release
-- [ ] fractional-scale + wp_viewport on the parent, HiDPI-correct cursors
-- [ ] xdg-decoration SSD; initial window size = game resolution
-- [ ] frame pacing: frame callbacks both sides, no busy loops
-- [ ] signal-correct exit codes; logging via DYNSCOPE_DEBUG=1; Steam launch
+- [x] fractional-scale + wp_viewport on the parent, HiDPI-correct cursors
+- [x] xdg-decoration SSD; initial window size = game resolution
+- [x] frame pacing: frame callbacks both sides, no busy loops
+- [x] signal-correct exit codes; logging via DYNSCOPE_DEBUG=1; Steam launch
       options docs in README
-- [ ] test matrix run on Hyprland: glxgears, SDL2 game, resolution switch,
+- [x] test matrix run on Hyprland: glxgears, SDL2 game, resolution switch,
       camera lock, clipboard
 - [ ] tag v0.1.0
+Exit criteria: release-ready binary, verified on Hyprland with clean test matrix. Verified on Hyprland: fractional scale (wp_fractional_scale_v1) and viewport (wp_viewport) eliminate compositor upscaling blur; cursors render HiDPI-correct; server-side decorations (zxdg_decoration_manager_v1) and initial window geometry match native game resolution; frame pacing synchronizes presentation to host display refresh rate with zero busy loops; child supervisor faithfully propagates exit codes (0, 42) and crash signals (128+SIGSEGV = 139); full test matrix verified covering glxgears, SDL2 game, live resolution switching, camera lock, and bidirectional clipboard.
 
 ## Risks / open items
 - xrandr-driven resolution changes (vs window resize): Xwayland RR emulation

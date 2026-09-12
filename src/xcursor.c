@@ -62,8 +62,7 @@ static void xcursor_update_texture(struct xcursor *xc, xcb_xfixes_get_cursor_ima
 	if (!any_visible) {
 		free(pixels);
 		xcursor_clear_texture(xc);
-		if (getenv("DYNSCOPE_DEBUG") != NULL)
-			fprintf(stderr, "dynscope: game cursor hidden (empty image)\n");
+		dynscope_log_debug("dynscope: game cursor hidden (empty image)\n");
 		s->cursor_image_empty = true;
 		host_set_cursor_hidden(s->ds);
 		server_update_lock(s);
@@ -85,7 +84,7 @@ static void xcursor_update_texture(struct xcursor *xc, xcb_xfixes_get_cursor_ima
 	xc->tex_valid = true;
 	s->cursor_image_empty = false;
 
-	double scale = 1.0;
+	double scale = host_get_scale(s->ds);
 	int out_w = (int)((double)w * scale + 0.5);
 	int out_h = (int)((double)h * scale + 0.5);
 	if (out_w < 1)
@@ -126,8 +125,7 @@ static void xcursor_update_texture(struct xcursor *xc, xcb_xfixes_get_cursor_ima
 	free(scaled);
 	server_update_lock(s);
 
-	if (getenv("DYNSCOPE_DEBUG") != NULL)
-		fprintf(stderr, "dynscope: game cursor %dx%d hotspot=%d,%d scale=%.2f\n", w, h, img->xhot, img->yhot, scale);
+	dynscope_log_debug("dynscope: game cursor %dx%d hotspot=%d,%d scale=%.2f\n", w, h, img->xhot, img->yhot, scale);
 }
 
 void xcursor_refresh(struct server *server) {

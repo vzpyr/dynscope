@@ -18,6 +18,9 @@
 #include "pointer-constraints-unstable-v1-client-protocol.h"
 #include "relative-pointer-unstable-v1-client-protocol.h"
 #include "primary-selection-unstable-v1-client-protocol.h"
+#include "fractional-scale-v1-client-protocol.h"
+#include "viewporter-client-protocol.h"
+#include "xdg-decoration-unstable-v1-client-protocol.h"
 
 #define DEFAULT_WIDTH 1280
 #define DEFAULT_HEIGHT 720
@@ -83,6 +86,18 @@ struct host {
 	struct wl_shm_pool *cursor_pool;
 	struct wl_buffer *cursor_buffer;
 
+	struct wp_fractional_scale_manager_v1 *fractional_scale_manager;
+	struct wp_fractional_scale_v1 *fractional_scale;
+	struct wp_viewporter *viewporter;
+	struct wp_viewport *viewport;
+	struct wp_viewport *cursor_viewport;
+	struct zxdg_decoration_manager_v1 *decoration_manager;
+	struct zxdg_toplevel_decoration_v1 *toplevel_decoration;
+	uint32_t scale_120;
+	bool user_resized;
+	bool frame_pending;
+	struct wl_event_source *idle_source;
+
 	struct wl_keyboard *keyboard;
 	struct wl_data_device_manager *data_device_manager;
 	struct wl_data_device *data_device;
@@ -135,6 +150,8 @@ static const struct wl_data_source_listener data_source_listener;
 static const struct zwp_primary_selection_device_v1_listener primary_device_listener;
 static const struct zwp_primary_selection_offer_v1_listener primary_offer_listener;
 static const struct zwp_primary_selection_source_v1_listener primary_source_listener;
+static const struct wp_fractional_scale_v1_listener fractional_scale_listener;
+static const struct zxdg_toplevel_decoration_v1_listener decoration_listener;
 
 static void host_apply_cursor_impl(struct host *host);
 
@@ -161,6 +178,12 @@ static void registry_handle_global(void *data, struct wl_registry *registry, uin
 		host->data_device_manager = wl_registry_bind(registry, name, &wl_data_device_manager_interface, version < (uint32_t)wl_data_device_manager_interface.version ? version : (uint32_t)wl_data_device_manager_interface.version);
 	else if (strcmp(interface, zwp_primary_selection_device_manager_v1_interface.name) == 0)
 		host->primary_manager = wl_registry_bind(registry, name, &zwp_primary_selection_device_manager_v1_interface, version < 1u ? version : 1u);
+	else if (strcmp(interface, wp_fractional_scale_manager_v1_interface.name) == 0)
+		host->fractional_scale_manager = wl_registry_bind(registry, name, &wp_fractional_scale_manager_v1_interface, 1);
+	else if (strcmp(interface, wp_viewporter_interface.name) == 0)
+		host->viewporter = wl_registry_bind(registry, name, &wp_viewporter_interface, 1);
+	else if (strcmp(interface, zxdg_decoration_manager_v1_interface.name) == 0)
+		host->decoration_manager = wl_registry_bind(registry, name, &zxdg_decoration_manager_v1_interface, 1);
 }
 
 static void registry_handle_global_remove(void *data, struct wl_registry *registry, uint32_t name) {
@@ -172,6 +195,28 @@ static void registry_handle_global_remove(void *data, struct wl_registry *regist
 static const struct wl_registry_listener registry_listener = {
 	.global = registry_handle_global,
 	.global_remove = registry_handle_global_remove,
+};
+
+static void fractional_scale_handle_preferred_scale(void *data, struct wp_fractional_scale_v1 *wp_fractional_scale_v1, uint32_t scale) {
+	(void)wp_fractional_scale_v1;
+	struct host *host = data;
+	host->scale_120 = scale;
+	dynscope_log_debug("dynscope: host preferred fractional scale %u/120 (%.2f)\n", scale, (double)scale / 120.0);
+	host_request_frame(host->ds);
+}
+
+static const struct wp_fractional_scale_v1_listener fractional_scale_listener = {
+	.preferred_scale = fractional_scale_handle_preferred_scale,
+};
+
+static void decoration_handle_configure(void *data, struct zxdg_toplevel_decoration_v1 *decoration, uint32_t mode) {
+	(void)data;
+	(void)decoration;
+	(void)mode;
+}
+
+static const struct zxdg_toplevel_decoration_v1_listener decoration_listener = {
+	.configure = decoration_handle_configure,
 };
 
 static void wm_base_handle_ping(void *data, struct xdg_wm_base *xdg_wm_base, uint32_t serial) {
@@ -187,6 +232,8 @@ static void toplevel_handle_configure(void *data, struct xdg_toplevel *toplevel,
 	struct host *host = data;
 	(void)toplevel;
 	(void)states;
+	if (width > 0 && height > 0)
+		host->user_resized = true;
 	host->pending_width = width;
 	host->pending_height = height;
 }
@@ -251,8 +298,26 @@ static void host_present(struct host *host) {
 	if (host->dmabuf == NULL || host->width <= 0 || host->height <= 0)
 		return;
 
+	if (host->idle_source != NULL) {
+		wl_event_source_remove(host->idle_source);
+		host->idle_source = NULL;
+	}
+
+	if (host->frame != NULL) {
+		host->frame_pending = true;
+		return;
+	}
+
+	double scale = host_get_scale(host->ds);
+	int buf_w = host->width;
+	int buf_h = host->height;
+	if (host->viewport != NULL && scale > 0.0) {
+		buf_w = (int)((double)host->width * scale + 0.5);
+		buf_h = (int)((double)host->height * scale + 0.5);
+	}
+
 	struct frame_info info;
-	server_present(host->ds, host->width, host->height, &info);
+	server_present(host->ds, buf_w, buf_h, &info);
 	if (info.fd < 0)
 		return;
 
@@ -272,15 +337,13 @@ static void host_present(struct host *host) {
 		return;
 	}
 
-	if (host->frame != NULL) {
-		wl_callback_destroy(host->frame);
-		host->frame = NULL;
-	}
 	host->frame = wl_surface_frame(host->surface);
 	wl_callback_add_listener(host->frame, &frame_listener, host);
 
 	wl_surface_attach(host->surface, buffer, 0, 0);
 	wl_surface_damage(host->surface, 0, 0, INT32_MAX, INT32_MAX);
+	if (host->viewport != NULL)
+		wp_viewport_set_destination(host->viewport, host->width, host->height);
 	wl_surface_commit(host->surface);
 }
 
@@ -293,7 +356,11 @@ static void frame_handle_done(void *data, struct wl_callback *callback, uint32_t
 
 	if (!host->ds->running)
 		return;
-	host_present(host);
+
+	if (host->frame_pending) {
+		host->frame_pending = false;
+		host_present(host);
+	}
 }
 
 static const struct wl_callback_listener frame_listener = {
@@ -304,8 +371,7 @@ static void xdg_surface_handle_configure(void *data, struct xdg_surface *xdg_sur
 	struct host *host = data;
 	xdg_surface_ack_configure(xdg_surface, serial);
 
-	if (getenv("DYNSCOPE_DEBUG") != NULL)
-		fprintf(stderr, "dynscope: host configure pending=%dx%d\n", host->pending_width, host->pending_height);
+	dynscope_log_debug("dynscope: host configure pending=%dx%d\n", host->pending_width, host->pending_height);
 
 	if (!host->configured) {
 		host->configured = true;
@@ -318,7 +384,7 @@ static void xdg_surface_handle_configure(void *data, struct xdg_surface *xdg_sur
 			host->height = host->pending_height;
 	}
 
-	host_present(host);
+	host_request_frame(host->ds);
 }
 
 static const struct xdg_surface_listener xdg_surface_listener = {
@@ -446,6 +512,11 @@ static void pointer_handle_enter(void *data, struct wl_pointer *pointer, uint32_
 	host->last_event_serial = serial;
 	double x = wl_fixed_to_double(sx);
 	double y = wl_fixed_to_double(sy);
+	if (host->viewport != NULL) {
+		double scale = host_get_scale(host->ds);
+		x *= scale;
+		y *= scale;
+	}
 	server_pointer_enter(host->ds, x, y);
 }
 
@@ -454,8 +525,7 @@ static void pointer_handle_leave(void *data, struct wl_pointer *pointer, uint32_
 	(void)pointer;
 	(void)serial;
 	(void)surface;
-	if (getenv("DYNSCOPE_DEBUG") != NULL)
-		fprintf(stderr, "dynscope: host pointer leave\n");
+	dynscope_log_debug("dynscope: host pointer leave\n");
 	server_pointer_leave(host->ds);
 }
 
@@ -464,6 +534,11 @@ static void pointer_handle_motion(void *data, struct wl_pointer *pointer, uint32
 	(void)pointer;
 	double x = wl_fixed_to_double(sx);
 	double y = wl_fixed_to_double(sy);
+	if (host->viewport != NULL) {
+		double scale = host_get_scale(host->ds);
+		x *= scale;
+		y *= scale;
+	}
 	server_pointer_motion(host->ds, time, x, y);
 }
 
@@ -472,8 +547,7 @@ static void pointer_handle_button(void *data, struct wl_pointer *pointer, uint32
 	(void)pointer;
 	(void)time;
 	host->last_event_serial = serial;
-	if (getenv("DYNSCOPE_DEBUG") != NULL)
-		fprintf(stderr, "dynscope: host button %u state=%u\n", button, state);
+	dynscope_log_debug("dynscope: host button %u state=%u\n", button, state);
 	server_pointer_button(host->ds, time, button, state);
 }
 
@@ -542,8 +616,7 @@ static void locked_pointer_handle_locked(void *data, struct zwp_locked_pointer_v
 	struct host *host = data;
 	(void)locked_pointer;
 	host->pointer_locked = true;
-	if (getenv("DYNSCOPE_DEBUG") != NULL)
-		fprintf(stderr, "dynscope: host pointer locked\n");
+	dynscope_log_debug("dynscope: host pointer locked\n");
 	host_apply_cursor_impl(host);
 }
 
@@ -551,8 +624,7 @@ static void locked_pointer_handle_unlocked(void *data, struct zwp_locked_pointer
 	struct host *host = data;
 	(void)locked_pointer;
 	host->pointer_locked = false;
-	if (getenv("DYNSCOPE_DEBUG") != NULL)
-		fprintf(stderr, "dynscope: host pointer unlocked\n");
+	dynscope_log_debug("dynscope: host pointer unlocked\n");
 	host_apply_cursor_impl(host);
 }
 
@@ -586,13 +658,11 @@ static void host_cursor_clear_buffer(struct host_cursor *cursor) {
 static void host_apply_cursor_impl(struct host *host) {
 	struct host_cursor *cursor = &host->cursor;
 	if (host->pointer == NULL || host->surface == NULL) {
-		if (getenv("DYNSCOPE_DEBUG") != NULL)
-			fprintf(stderr, "dynscope: apply cursor skipped pointer=%p surface=%p\n", (void *)host->pointer, (void *)host->surface);
+		dynscope_log_debug("dynscope: apply cursor skipped pointer=%p surface=%p\n", (void *)host->pointer, (void *)host->surface);
 		return;
 	}
 
-	if (getenv("DYNSCOPE_DEBUG") != NULL)
-		fprintf(stderr, "dynscope: apply cursor mode=%d serial=%u locked=%d kb=%d\n", cursor->mode, host->pointer_enter_serial, host->pointer_locked, host->keyboard_entered);
+	dynscope_log_debug("dynscope: apply cursor mode=%d serial=%u locked=%d kb=%d\n", cursor->mode, host->pointer_enter_serial, host->pointer_locked, host->keyboard_entered);
 
 	wl_display_dispatch_pending(host->display);
 	wl_display_flush(host->display);
@@ -664,12 +734,30 @@ static void host_apply_cursor_impl(struct host *host) {
 			return;
 		}
 	}
+	double scale = host_get_scale(host->ds);
+	if (host->cursor_viewport == NULL && host->viewporter != NULL)
+		host->cursor_viewport = wp_viewporter_get_viewport(host->viewporter, host->cursor_surface);
+
 	wl_surface_attach(host->cursor_surface, buffer, 0, 0);
 	wl_surface_damage(host->cursor_surface, 0, 0, INT32_MAX, INT32_MAX);
+	int logical_w = cursor->width;
+	int logical_h = cursor->height;
+	int logical_hx = cursor->hotspot_x;
+	int logical_hy = cursor->hotspot_y;
+	if (scale > 0.0 && scale != 1.0) {
+		logical_w = (int)((double)cursor->width / scale + 0.5);
+		logical_h = (int)((double)cursor->height / scale + 0.5);
+		logical_hx = (int)((double)cursor->hotspot_x / scale + 0.5);
+		logical_hy = (int)((double)cursor->hotspot_y / scale + 0.5);
+	}
+	if (host->cursor_viewport != NULL)
+		wp_viewport_set_destination(host->cursor_viewport, logical_w, logical_h);
+	else
+		wl_surface_set_buffer_scale(host->cursor_surface, (int32_t)(scale + 0.5));
 	wl_surface_commit(host->cursor_surface);
 	host->cursor_buffer = buffer;
 
-	wl_pointer_set_cursor(host->pointer, host->pointer_enter_serial, host->cursor_surface, cursor->hotspot_x, cursor->hotspot_y);
+	wl_pointer_set_cursor(host->pointer, host->pointer_enter_serial, host->cursor_surface, logical_hx, logical_hy);
 }
 
 struct host_offer {
@@ -1075,13 +1163,48 @@ void host_set_selection(struct dynscope *ds, bool primary, const char *data, siz
 
 static void host_frame_idle(void *data) {
 	struct host *host = data;
+	host->idle_source = NULL;
+	if (host->frame != NULL) {
+		host->frame_pending = true;
+		return;
+	}
 	host_present(host);
 }
 
 void host_request_frame(struct dynscope *ds) {
-	if (ds->host == NULL || ds->host->width <= 0)
+	if (ds == NULL || ds->host == NULL)
 		return;
-	wl_event_loop_add_idle(ds->loop, host_frame_idle, ds->host);
+	struct host *host = ds->host;
+	if (host->width <= 0 || host->height <= 0)
+		return;
+	if (host->frame != NULL) {
+		host->frame_pending = true;
+		return;
+	}
+	if (host->idle_source == NULL)
+		host->idle_source = wl_event_loop_add_idle(ds->loop, host_frame_idle, host);
+}
+
+double host_get_scale(struct dynscope *ds) {
+	if (ds == NULL || ds->host == NULL)
+		return 1.0;
+	if (ds->host->scale_120 > 0)
+		return (double)ds->host->scale_120 / 120.0;
+	return 1.0;
+}
+
+void host_set_initial_size(struct dynscope *ds, int width, int height) {
+	if (ds == NULL || ds->host == NULL)
+		return;
+	struct host *host = ds->host;
+	if (host->user_resized || width <= 0 || height <= 0)
+		return;
+	if (host->width == width && host->height == height)
+		return;
+	host->width = width;
+	host->height = height;
+	dynscope_log_debug("dynscope: matching initial host window size to game resolution %dx%d\n", width, height);
+	host_request_frame(ds);
 }
 
 void host_set_cursor_hidden(struct dynscope *ds) {
@@ -1124,8 +1247,7 @@ void host_set_locked(struct dynscope *ds, bool locked) {
 		host->relative_pointer = zwp_relative_pointer_manager_v1_get_relative_pointer(host->relative_pointer_manager, host->pointer);
 		if (host->relative_pointer != NULL)
 			zwp_relative_pointer_v1_add_listener(host->relative_pointer, &relative_pointer_listener, host);
-		if (getenv("DYNSCOPE_DEBUG") != NULL)
-			fprintf(stderr, "dynscope: host lock requested\n");
+		dynscope_log_debug("dynscope: host lock requested\n");
 	}
 
 	host_apply_cursor_impl(host);
@@ -1240,6 +1362,12 @@ int host_open(struct dynscope *ds) {
 	}
 
 	host->surface = wl_compositor_create_surface(host->compositor);
+	if (host->viewporter != NULL)
+		host->viewport = wp_viewporter_get_viewport(host->viewporter, host->surface);
+	if (host->fractional_scale_manager != NULL) {
+		host->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(host->fractional_scale_manager, host->surface);
+		wp_fractional_scale_v1_add_listener(host->fractional_scale, &fractional_scale_listener, host);
+	}
 	host->xdg_surface = xdg_wm_base_get_xdg_surface(host->wm_base, host->surface);
 	xdg_wm_base_add_listener(host->wm_base, &wm_base_listener, host);
 	xdg_surface_add_listener(host->xdg_surface, &xdg_surface_listener, host);
@@ -1248,6 +1376,12 @@ int host_open(struct dynscope *ds) {
 	xdg_toplevel_set_title(host->toplevel, "dynscope");
 	xdg_toplevel_set_app_id(host->toplevel, "dynscope");
 	xdg_toplevel_add_listener(host->toplevel, &toplevel_listener, host);
+
+	if (host->decoration_manager != NULL) {
+		host->toplevel_decoration = zxdg_decoration_manager_v1_get_toplevel_decoration(host->decoration_manager, host->toplevel);
+		zxdg_toplevel_decoration_v1_set_mode(host->toplevel_decoration, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+		zxdg_toplevel_decoration_v1_add_listener(host->toplevel_decoration, &decoration_listener, host);
+	}
 
 	wl_seat_add_listener(host->seat, &seat_listener, host);
 
@@ -1281,8 +1415,24 @@ void host_close(struct dynscope *ds) {
 		return;
 	ds->host = NULL;
 
+	if (host->idle_source != NULL)
+		wl_event_source_remove(host->idle_source);
 	if (host->frame != NULL)
 		wl_callback_destroy(host->frame);
+	if (host->toplevel_decoration != NULL)
+		zxdg_toplevel_decoration_v1_destroy(host->toplevel_decoration);
+	if (host->decoration_manager != NULL)
+		zxdg_decoration_manager_v1_destroy(host->decoration_manager);
+	if (host->fractional_scale != NULL)
+		wp_fractional_scale_v1_destroy(host->fractional_scale);
+	if (host->fractional_scale_manager != NULL)
+		wp_fractional_scale_manager_v1_destroy(host->fractional_scale_manager);
+	if (host->cursor_viewport != NULL)
+		wp_viewport_destroy(host->cursor_viewport);
+	if (host->viewport != NULL)
+		wp_viewport_destroy(host->viewport);
+	if (host->viewporter != NULL)
+		wp_viewporter_destroy(host->viewporter);
 	struct outstanding *outstanding;
 	wl_array_for_each(outstanding, &host->outstanding)
 		wl_buffer_destroy(outstanding->buffer);

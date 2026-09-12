@@ -95,6 +95,7 @@ struct server {
 	struct wlr_pointer_constraints_v1 *constraints;
 	struct wlr_relative_pointer_manager_v1 *relative_pointer;
 	struct wl_listener new_constraint;
+	struct wl_listener new_surface;
 	struct wl_list game_constraints;
 	struct wlr_pointer_constraint_v1 *active_constraint;
 	pixman_region32_t confine;

@@ -10,8 +10,8 @@
 #include "server.h"
 
 static int handle_signal(int signal_number, void *data) {
-	(void)signal_number;
 	struct dynscope *ds = data;
+	ds->caught_signal = signal_number;
 	dynscope_close(ds);
 	return 1;
 }

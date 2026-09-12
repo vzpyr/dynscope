@@ -30,6 +30,10 @@ tablet_xml = join_paths(wayland_protocols_dir, 'unstable', 'tablet', 'tablet-uns
 pointer_constraints_xml = join_paths(wayland_protocols_dir, 'unstable', 'pointer-constraints', 'pointer-constraints-unstable-v1.xml')
 relative_pointer_xml = join_paths(wayland_protocols_dir, 'unstable', 'relative-pointer', 'relative-pointer-unstable-v1.xml')
 primary_selection_xml = join_paths(wayland_protocols_dir, 'unstable', 'primary-selection', 'primary-selection-unstable-v1.xml')
+fractional_scale_xml = join_paths(wayland_protocols_dir, 'staging', 'fractional-scale', 'fractional-scale-v1.xml')
+viewporter_xml = join_paths(wayland_protocols_dir, 'stable', 'viewporter', 'viewporter.xml')
+xdg_decoration_xml = join_paths(wayland_protocols_dir, 'unstable', 'xdg-decoration', 'xdg-decoration-unstable-v1.xml')
+
 
 xdg_shell_header = custom_target(
   'xdg-shell client header',
@@ -122,6 +126,48 @@ primary_selection_code = custom_target(
   command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
 )
 
+fractional_scale_header = custom_target(
+  'fractional-scale client header',
+  input: fractional_scale_xml,
+  output: 'fractional-scale-v1-client-protocol.h',
+  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
+)
+
+fractional_scale_code = custom_target(
+  'fractional-scale private code',
+  input: fractional_scale_xml,
+  output: 'fractional-scale-v1-protocol.c',
+  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+)
+
+viewporter_header = custom_target(
+  'viewporter client header',
+  input: viewporter_xml,
+  output: 'viewporter-client-protocol.h',
+  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
+)
+
+viewporter_code = custom_target(
+  'viewporter private code',
+  input: viewporter_xml,
+  output: 'viewporter-protocol.c',
+  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+)
+
+xdg_decoration_header = custom_target(
+  'xdg-decoration client header',
+  input: xdg_decoration_xml,
+  output: 'xdg-decoration-unstable-v1-client-protocol.h',
+  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
+)
+
+xdg_decoration_code = custom_target(
+  'xdg-decoration private code',
+  input: xdg_decoration_xml,
+  output: 'xdg-decoration-unstable-v1-protocol.c',
+  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+)
+
 protocol_lib = static_library(
   'dynscope-protocols',
   xdg_shell_code,
@@ -131,6 +177,9 @@ protocol_lib = static_library(
   pointer_constraints_code,
   relative_pointer_code,
   primary_selection_code,
+  fractional_scale_code,
+  viewporter_code,
+  xdg_decoration_code,
   c_args: ['-w'],
 )
 
@@ -149,7 +198,11 @@ executable(
   pointer_constraints_header,
   relative_pointer_header,
   primary_selection_header,
+  fractional_scale_header,
+  viewporter_header,
+  xdg_decoration_header,
   dependencies: [wayland_client_dep, wayland_server_dep, glesv2_dep, xkbcommon_dep, wlroots_dep, dependency('xcb'), dependency('xcb-xfixes'), dependency('pixman-1')],
   link_with: protocol_lib,
   include_directories: include_directories('src'),
 )
+

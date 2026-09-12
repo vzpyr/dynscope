@@ -3,6 +3,9 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/types.h>
 #include <wayland-server-core.h>
 
@@ -42,8 +45,21 @@ struct dynscope {
 	bool running;
 	bool closing;
 	int exit_code;
+	int caught_signal;
 };
 
 void dynscope_close(struct dynscope *ds);
 
+static inline bool dynscope_debug_enabled(void) {
+	static int enabled = -1;
+	if (enabled < 0) {
+		const char *env = getenv("DYNSCOPE_DEBUG");
+		enabled = (env != NULL && strcmp(env, "0") != 0) ? 1 : 0;
+	}
+	return enabled == 1;
+}
+
+#define dynscope_log_debug(...) do { if (dynscope_debug_enabled()) fprintf(stderr, __VA_ARGS__); } while (0)
+
 #endif
+

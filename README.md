@@ -21,15 +21,24 @@ window in your Wayland session:
 dynscope -- COMMAND [ARG...]
 ```
 
-Steam launch options:
+### Steam Launch Options
+
+Right-click a game in your Steam Library, select Properties, and enter the following into Launch Options:
 
 ```
 /path/to/dynscope -- %command%
 ```
 
+Or if dynscope is installed in your system PATH:
+
+```
+dynscope -- %command%
+```
+
 The window can be resized freely at any time; the game keeps its own
 resolution and is letterboxed into the window. Closing the window
-terminates the game. dynscope exits with the game's exit code.
+terminates the game. dynscope exits with the game's exact exit code
+or signal status.
 
 Requirements: a Wayland compositor, Xwayland (bundled logic via wlroots),
 wlroots 0.20, meson, ninja.
@@ -43,7 +52,7 @@ ninja -C build
 
 ## Debugging
 
-Set `DYNSCOPE_DEBUG=1` for verbose logging (phase 6).
+Set `DYNSCOPE_DEBUG=1` for verbose diagnostic logging.
 
 ## Status
 

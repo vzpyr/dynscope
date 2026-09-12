@@ -109,6 +109,8 @@ static void handle_map_request(struct wl_listener *listener, void *data) {
 	wlr_xwayland_surface_configure(xs, x, y, w, h);
 	wlr_xwayland_surface_restack(xs, NULL, XCB_STACK_MODE_ABOVE);
 	claim_focus(xwm, xs);
+	if (xs->width > 0 && xs->height > 0)
+		host_set_initial_size(xwm->server->ds, (int)xs->width, (int)xs->height);
 }
 
 static void handle_associate(struct wl_listener *listener, void *data) {
@@ -140,8 +142,7 @@ static void handle_request_configure(struct wl_listener *listener, void *data) {
 	(void)xwm;
 
 	wlr_xwayland_surface_configure(win->xs, event->x, event->y, event->width, event->height);
-	if (getenv("DYNSCOPE_DEBUG") != NULL)
-		fprintf(stderr, "dynscope: configure request %ux%u at %d,%d\n", event->width, event->height, event->x, event->y);
+	dynscope_log_debug("dynscope: configure request %ux%u at %d,%d\n", event->width, event->height, event->x, event->y);
 }
 
 static void handle_set_title(struct wl_listener *listener, void *data) {

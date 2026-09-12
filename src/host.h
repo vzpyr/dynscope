@@ -17,5 +17,7 @@ void host_apply_cursor(struct dynscope *ds);
 void host_set_cursor_hidden(struct dynscope *ds);
 void host_set_locked(struct dynscope *ds, bool locked);
 void host_set_selection(struct dynscope *ds, bool primary, const char *data, size_t len);
+double host_get_scale(struct dynscope *ds);
+void host_set_initial_size(struct dynscope *ds, int width, int height);
 
 #endif

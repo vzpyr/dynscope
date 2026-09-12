@@ -110,10 +110,16 @@ static void child_finish(struct dynscope *ds, int wait_status) {
 		code = WEXITSTATUS(wait_status);
 	} else if (wait_status >= 0 && WIFSIGNALED(wait_status)) {
 		int signal_number = WTERMSIG(wait_status);
-		if (child->terminated_by_us && (signal_number == SIGTERM || signal_number == SIGKILL))
-			code = 0;
-		else
+		if (child->terminated_by_us && (signal_number == SIGTERM || signal_number == SIGKILL)) {
+			if (ds->caught_signal != 0)
+				code = 128 + ds->caught_signal;
+			else
+				code = 0;
+		} else {
 			code = 128 + signal_number;
+		}
+	} else if (ds->caught_signal != 0) {
+		code = 128 + ds->caught_signal;
 	}
 
 	ds->exit_code = code;

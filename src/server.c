@@ -135,8 +135,7 @@ static void server_update_fit(struct server *s, int width, int height) {
 	int game_h = 0;
 	xwm_game_size(s, &game_w, &game_h);
 
-	if (getenv("DYNSCOPE_DEBUG") != NULL)
-		fprintf(stderr, "dynscope: fit window=%dx%d game=%dx%d\n", width, height, game_w, game_h);
+	dynscope_log_debug("dynscope: fit window=%dx%d game=%dx%d\n", width, height, game_w, game_h);
 
 	if (s->xwm == NULL || game_w <= 0 || game_h <= 0) {
 		s->fit.scale = 1.0;
@@ -232,8 +231,7 @@ void server_pointer_enter(struct dynscope *ds, double host_x, double host_y) {
 	struct wlr_surface *surface = NULL;
 	double x, y;
 	xwm_pick_surface(s, host_x, host_y, &surface, &x, &y);
-	if (getenv("DYNSCOPE_DEBUG") != NULL)
-		fprintf(stderr, "dynscope: server pointer enter host=(%.0f,%.0f) surface=%p res=%u game=(%.1f,%.1f)\n", host_x, host_y, (void *)surface, surface != NULL ? wl_resource_get_id(surface->resource) : 0, x, y);
+	dynscope_log_debug("dynscope: server pointer enter host=(%.0f,%.0f) surface=%p res=%u game=(%.1f,%.1f)\n", host_x, host_y, (void *)surface, surface != NULL ? wl_resource_get_id(surface->resource) : 0, x, y);
 	if (surface == NULL)
 		return;
 	s->pointer_surface = surface;
@@ -337,8 +335,7 @@ void server_pointer_button(struct dynscope *ds, uint32_t time_msec, uint32_t but
 	struct server *s = ds->server;
 	if (s == NULL)
 		return;
-	if (getenv("DYNSCOPE_DEBUG") != NULL)
-		fprintf(stderr, "dynscope: server button %u state=%u ptr_surface=%p\n", button, state, (void *)s->pointer_surface);
+	dynscope_log_debug("dynscope: server button %u state=%u ptr_surface=%p\n", button, state, (void *)s->pointer_surface);
 	if (s->pointer_surface == NULL)
 		return;
 	wlr_seat_pointer_notify_button(s->seat, time_msec, button, (enum wl_pointer_button_state)state);
@@ -364,8 +361,7 @@ static void server_warp_to_constraint_hint(struct server *s) {
 	s->pointer_x = sx;
 	s->pointer_y = sy;
 	wlr_seat_pointer_warp(s->seat, sx, sy);
-	if (getenv("DYNSCOPE_DEBUG") != NULL)
-		fprintf(stderr, "dynscope: warp to cursor hint (%.1f,%.1f)\n", sx, sy);
+	dynscope_log_debug("dynscope: warp to cursor hint (%.1f,%.1f)\n", sx, sy);
 }
 
 static void server_update_cursor_constraint(struct server *s) {
@@ -467,8 +463,7 @@ void server_update_lock(struct server *s) {
 	if (relative == s->host_locked)
 		return;
 	s->host_locked = relative;
-	if (getenv("DYNSCOPE_DEBUG") != NULL)
-		fprintf(stderr, "dynscope: relative mouse mode %s (cursor_empty=%d constraint=%d)\n", relative ? "on" : "off", s->cursor_image_empty, s->active_constraint != NULL);
+	dynscope_log_debug("dynscope: relative mouse mode %s (cursor_empty=%d constraint=%d)\n", relative ? "on" : "off", s->cursor_image_empty, s->active_constraint != NULL);
 	host_set_locked(s->ds, relative);
 }
 
@@ -537,8 +532,7 @@ void server_keyboard_key(struct dynscope *ds, uint32_t key, bool pressed) {
 	struct server *s = ds->server;
 	if (s == NULL)
 		return;
-	if (getenv("DYNSCOPE_DEBUG") != NULL)
-		fprintf(stderr, "dynscope: server key %u %s\n", key, pressed ? "down" : "up");
+	dynscope_log_debug("dynscope: server key %u %s\n", key, pressed ? "down" : "up");
 
 	struct wlr_keyboard_key_event event = {
 		.keycode = key,
@@ -579,6 +573,41 @@ static void handle_xwayland_destroy(struct wl_listener *listener, void *data) {
 	dynscope_close(s->ds);
 }
 
+struct server_surface {
+	struct server *server;
+	struct wlr_surface *wlr;
+	struct wl_listener commit;
+	struct wl_listener destroy;
+};
+
+static void handle_surface_commit(struct wl_listener *listener, void *data) {
+	struct server_surface *ss = wl_container_of(listener, ss, commit);
+	(void)data;
+	host_request_frame(ss->server->ds);
+}
+
+static void handle_surface_destroy(struct wl_listener *listener, void *data) {
+	struct server_surface *ss = wl_container_of(listener, ss, destroy);
+	(void)data;
+	wl_list_remove(&ss->commit.link);
+	wl_list_remove(&ss->destroy.link);
+	free(ss);
+}
+
+static void handle_new_surface(struct wl_listener *listener, void *data) {
+	struct server *s = wl_container_of(listener, s, new_surface);
+	struct wlr_surface *surface = data;
+	struct server_surface *ss = calloc(1, sizeof(*ss));
+	if (ss == NULL)
+		return;
+	ss->server = s;
+	ss->wlr = surface;
+	ss->commit.notify = handle_surface_commit;
+	wl_signal_add(&surface->events.commit, &ss->commit);
+	ss->destroy.notify = handle_surface_destroy;
+	wl_signal_add(&surface->events.destroy, &ss->destroy);
+}
+
 int server_init(struct dynscope *ds) {
 	struct server *s = calloc(1, sizeof(*s));
 	if (s == NULL) {
@@ -588,9 +617,7 @@ int server_init(struct dynscope *ds) {
 	s->ds = ds;
 	ds->server = s;
 
-	enum wlr_log_importance log_importance = WLR_ERROR;
-	if (getenv("DYNSCOPE_DEBUG") != NULL)
-		log_importance = WLR_DEBUG;
+	enum wlr_log_importance log_importance = dynscope_debug_enabled() ? WLR_DEBUG : WLR_ERROR;
 	wlr_log_init(log_importance, NULL);
 
 	s->display = wl_display_create();
@@ -656,6 +683,8 @@ int server_init(struct dynscope *ds) {
 		fprintf(stderr, "dynscope: failed to create compositor\n");
 		goto fail;
 	}
+	s->new_surface.notify = handle_new_surface;
+	wl_signal_add(&s->compositor->events.new_surface, &s->new_surface);
 	s->subcompositor = wlr_subcompositor_create(s->display);
 	if (wlr_viewporter_create(s->display) == NULL) {
 		fprintf(stderr, "dynscope: failed to create viewporter\n");
@@ -746,6 +775,7 @@ void server_finish(struct dynscope *ds) {
 	xwm_finish(s);
 	xcursor_finish(s);
 	clipboard_finish(s);
+	wl_list_remove(&s->new_surface.link);
 	wl_list_remove(&s->new_constraint.link);
 	if (s->xwayland != NULL) {
 		wl_list_remove(&s->xwayland_destroy.link);
