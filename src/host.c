@@ -122,6 +122,7 @@ struct host {
 
 	struct wl_event_source *fd_src;
 	struct wl_event_source *flush_src;
+	struct wl_event_source *close_timer;
 	struct wl_callback *frame;
 
 	int width;
@@ -238,11 +239,30 @@ static void toplevel_handle_configure(void *data, struct xdg_toplevel *toplevel,
 	host->pending_height = height;
 }
 
+static int handle_close_timeout(void *data) {
+	struct host *host = data;
+	host->close_timer = NULL;
+	dynscope_close(host->ds);
+	return 0;
+}
+
 static void toplevel_handle_close(void *data, struct xdg_toplevel *toplevel) {
 	struct host *host = data;
 	(void)toplevel;
-	dynscope_close(host->ds);
+	if (host->close_timer != NULL)
+		return;
+
+	int closed = server_request_close(host->ds);
+	if (closed <= 0) {
+		dynscope_close(host->ds);
+		return;
+	}
+
+	host->close_timer = wl_event_loop_add_timer(host->ds->loop, handle_close_timeout, host);
+	if (host->close_timer != NULL)
+		wl_event_source_timer_update(host->close_timer, 1500);
 }
+
 
 static void toplevel_handle_configure_bounds(void *data, struct xdg_toplevel *toplevel, int32_t width, int32_t height) {
 	(void)data;
@@ -1415,6 +1435,8 @@ void host_close(struct dynscope *ds) {
 		return;
 	ds->host = NULL;
 
+	if (host->close_timer != NULL)
+		wl_event_source_remove(host->close_timer);
 	if (host->idle_source != NULL)
 		wl_event_source_remove(host->idle_source);
 	if (host->frame != NULL)

@@ -34,38 +34,68 @@ struct xwm {
 	struct server *server;
 	struct wl_listener new_surface;
 	struct wl_list windows;
-	struct wlr_xwayland_surface *game;
+	struct wlr_xwayland_surface *primary;
+	struct wlr_xwayland_surface *focus;
+	bool closing;
 };
 
 static void keyboard_focus(struct xwm *xwm, struct wlr_xwayland_surface *xs) {
-	if (xs->surface == NULL)
+	if (xs == NULL || xs->surface == NULL)
 		return;
 	wlr_xwayland_surface_activate(xs, true);
 	wlr_seat_keyboard_notify_enter(xwm->server->seat, xs->surface, NULL, 0, NULL);
 	server_constrain_focused(xwm->server);
 }
 
-static struct wlr_xwayland_surface *pick_focus(struct xwm *xwm) {
-	struct xwindow *win;
-	struct wlr_xwayland_surface *last = NULL;
-	wl_list_for_each_reverse(win, &xwm->windows, link) {
-		struct wlr_xwayland_surface *xs = win->xs;
-		if (xs->override_redirect)
-			continue;
-		if (last == NULL)
-			last = xs;
-		if (xs->surface != NULL && xs->surface->mapped)
-			return xs;
-	}
-	return last;
+static void claim_focus(struct xwm *xwm, struct wlr_xwayland_surface *xs) {
+	if (xs == NULL || xs->override_redirect)
+		return;
+	xwm->focus = xs;
+	const char *title = xs->title != NULL && xs->title[0] != '\0' ? xs->title : (xwm->primary != NULL && xwm->primary->title != NULL ? xwm->primary->title : "dynscope");
+	host_set_title(xwm->server->ds, title);
+	keyboard_focus(xwm, xs);
 }
 
-static void claim_focus(struct xwm *xwm, struct wlr_xwayland_surface *xs) {
-	if (xs->override_redirect)
-		return;
-	xwm->game = xs;
-	host_set_title(xwm->server->ds, xs->title != NULL && xs->title[0] != '\0' ? xs->title : "dynscope");
-	keyboard_focus(xwm, xs);
+static struct wlr_xwayland_surface *pick_primary(struct xwm *xwm) {
+	struct xwindow *win;
+	struct wlr_xwayland_surface *best = NULL;
+	uint32_t best_area = 0;
+	wl_list_for_each(win, &xwm->windows, link) {
+		struct wlr_xwayland_surface *xs = win->xs;
+		if (xs->override_redirect || xs->surface == NULL || !xs->surface->mapped)
+			continue;
+		uint32_t area = (uint32_t)xs->width * (uint32_t)xs->height;
+		if (best == NULL || area > best_area) {
+			best = xs;
+			best_area = area;
+		}
+	}
+	return best;
+}
+
+static struct wlr_xwayland_surface *pick_focus(struct xwm *xwm) {
+	struct xwindow *win;
+	wl_list_for_each_reverse(win, &xwm->windows, link) {
+		struct wlr_xwayland_surface *xs = win->xs;
+		if (xs->override_redirect || xs->surface == NULL || !xs->surface->mapped)
+			continue;
+		return xs;
+	}
+	return NULL;
+}
+
+static void xwindow_raise(struct xwm *xwm, struct xwindow *win) {
+	wl_list_remove(&win->link);
+	wl_list_insert(xwm->windows.prev, &win->link);
+}
+
+static struct xwindow *xwindow_find(struct xwm *xwm, struct wlr_xwayland_surface *xs) {
+	struct xwindow *win;
+	wl_list_for_each(win, &xwm->windows, link) {
+		if (win->xs == xs)
+			return win;
+	}
+	return NULL;
 }
 
 static void handle_destroy(struct wl_listener *listener, void *data) {
@@ -84,10 +114,27 @@ static void handle_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&win->link);
 	free(win);
 
-	if (xwm->game == xs) {
-		xwm->game = pick_focus(xwm);
-		if (xwm->game != NULL)
-			keyboard_focus(xwm, xwm->game);
+	if (xwm->primary == xs)
+		xwm->primary = pick_primary(xwm);
+
+	if (xwm->focus == xs) {
+		xwm->focus = xwm->primary != NULL ? xwm->primary : pick_focus(xwm);
+		if (xwm->focus != NULL)
+			claim_focus(xwm, xwm->focus);
+		else
+			server_constrain_focused(xwm->server);
+	}
+
+	if (xwm->closing) {
+		bool any_mapped = false;
+		wl_list_for_each(win, &xwm->windows, link) {
+			if (!win->xs->override_redirect && win->xs->surface != NULL && win->xs->surface->mapped) {
+				any_mapped = true;
+				break;
+			}
+		}
+		if (!any_mapped)
+			dynscope_close(xwm->server->ds);
 	}
 }
 
@@ -100,17 +147,35 @@ static void handle_map_request(struct wl_listener *listener, void *data) {
 	if (xs->override_redirect)
 		return;
 
-	int root_w = xwm->server->output->width;
-	int root_h = xwm->server->output->height;
-	uint16_t w = xs->width > 0 ? xs->width : (uint16_t)root_w;
-	uint16_t h = xs->height > 0 ? xs->height : (uint16_t)root_h;
-	int16_t x = (int16_t)((root_w - (int)w) / 2);
-	int16_t y = (int16_t)((root_h - (int)h) / 2);
-	wlr_xwayland_surface_configure(xs, x, y, w, h);
-	wlr_xwayland_surface_restack(xs, NULL, XCB_STACK_MODE_ABOVE);
+	uint16_t w = xs->width > 0 ? xs->width : 1280;
+	uint16_t h = xs->height > 0 ? xs->height : 720;
+
+	if (xwm->primary == NULL) {
+		xwm->primary = xs;
+		wlr_xwayland_surface_configure(xs, 0, 0, w, h);
+		server_update_output_mode(xwm->server, (int)w, (int)h);
+		host_set_initial_size(xwm->server->ds, (int)w, (int)h);
+	} else if (xs->parent == NULL && (uint32_t)w * (uint32_t)h > (uint32_t)xwm->primary->width * (uint32_t)xwm->primary->height) {
+		xwm->primary = xs;
+		wlr_xwayland_surface_configure(xs, 0, 0, w, h);
+		server_update_output_mode(xwm->server, (int)w, (int)h);
+		host_set_initial_size(xwm->server->ds, (int)w, (int)h);
+	} else {
+		int16_t x = xs->x;
+		int16_t y = xs->y;
+		if (x == 0 && y == 0) {
+			int pw = (int)xwm->primary->width;
+			int ph = (int)xwm->primary->height;
+			x = (int16_t)((pw - (int)w) / 2);
+			y = (int16_t)((ph - (int)h) / 2);
+		}
+		wlr_xwayland_surface_configure(xs, x, y, w, h);
+	}
+
+	xwindow_raise(xwm, win);
+	if (xwm->windows.next != xwm->windows.prev)
+		wlr_xwayland_surface_restack(xs, NULL, XCB_STACK_MODE_ABOVE);
 	claim_focus(xwm, xs);
-	if (xs->width > 0 && xs->height > 0)
-		host_set_initial_size(xwm->server->ds, (int)xs->width, (int)xs->height);
 }
 
 static void handle_associate(struct wl_listener *listener, void *data) {
@@ -119,7 +184,7 @@ static void handle_associate(struct wl_listener *listener, void *data) {
 	struct xwm *xwm = win->xwm;
 
 	(void)data;
-	if (xwm->game == xs)
+	if (xwm->focus == xs)
 		keyboard_focus(xwm, xs);
 }
 
@@ -132,24 +197,32 @@ static void handle_request_activate(struct wl_listener *listener, void *data) {
 	struct xwindow *win = wl_container_of(listener, win, request_activate);
 	struct wlr_xwayland_surface *xs = win->xs;
 	(void)data;
+	xwindow_raise(win->xwm, win);
+	if (win->xwm->windows.next != win->xwm->windows.prev)
+		wlr_xwayland_surface_restack(xs, NULL, XCB_STACK_MODE_ABOVE);
 	claim_focus(win->xwm, xs);
 }
+
 
 static void handle_request_configure(struct wl_listener *listener, void *data) {
 	struct xwindow *win = wl_container_of(listener, win, request_configure);
 	struct wlr_xwayland_surface_configure_event *event = data;
 	struct xwm *xwm = win->xwm;
-	(void)xwm;
 
 	wlr_xwayland_surface_configure(win->xs, event->x, event->y, event->width, event->height);
 	dynscope_log_debug("dynscope: configure request %ux%u at %d,%d\n", event->width, event->height, event->x, event->y);
+
+	if (win->xs == xwm->primary && event->width > 0 && event->height > 0)
+		server_update_output_mode(xwm->server, (int)event->width, (int)event->height);
 }
 
 static void handle_set_title(struct wl_listener *listener, void *data) {
 	struct xwindow *win = wl_container_of(listener, win, set_title);
 	(void)data;
-	if (win->xwm->game == win->xs)
-		host_set_title(win->xwm->server->ds, win->xs->title != NULL && win->xs->title[0] != '\0' ? win->xs->title : "dynscope");
+	if (win->xwm->focus == win->xs || (win->xwm->focus == NULL && win->xwm->primary == win->xs)) {
+		const char *title = win->xs->title != NULL && win->xs->title[0] != '\0' ? win->xs->title : "dynscope";
+		host_set_title(win->xwm->server->ds, title);
+	}
 }
 
 static void handle_new_surface(struct wl_listener *listener, void *data) {
@@ -208,21 +281,62 @@ static void draw_surface_tree(struct wlr_render_pass *pass, struct wlr_surface *
 
 struct wlr_surface *xwm_focus_surface(struct server *server) {
 	struct xwm *xwm = server->xwm;
-	if (xwm == NULL || xwm->game == NULL)
+	if (xwm == NULL)
 		return NULL;
-	return xwm->game->surface;
+	if (xwm->focus != NULL && xwm->focus->surface != NULL)
+		return xwm->focus->surface;
+	if (xwm->primary != NULL && xwm->primary->surface != NULL)
+		return xwm->primary->surface;
+	return NULL;
 }
 
 void xwm_game_size(struct server *server, int *width, int *height) {
 	*width = 0;
 	*height = 0;
 	struct xwm *xwm = server->xwm;
-	if (xwm == NULL || xwm->game == NULL || xwm->game->surface == NULL)
+	if (xwm == NULL || xwm->primary == NULL || xwm->primary->surface == NULL)
 		return;
 	struct wlr_fbox src;
-	wlr_surface_get_buffer_source_box(xwm->game->surface, &src);
+	wlr_surface_get_buffer_source_box(xwm->primary->surface, &src);
 	*width = (int)src.width;
 	*height = (int)src.height;
+}
+
+void xwm_surface_activate(struct server *server, struct wlr_surface *surface) {
+	struct xwm *xwm = server->xwm;
+	if (xwm == NULL || surface == NULL)
+		return;
+
+	struct wlr_surface *root_surface = wlr_surface_get_root_surface(surface);
+	struct wlr_xwayland_surface *xs = wlr_xwayland_surface_try_from_wlr_surface(root_surface != NULL ? root_surface : surface);
+	if (xs == NULL || xs->override_redirect)
+		return;
+
+	struct xwindow *win = xwindow_find(xwm, xs);
+	if (win != NULL) {
+		xwindow_raise(xwm, win);
+		if (xwm->windows.next != xwm->windows.prev)
+			wlr_xwayland_surface_restack(xs, NULL, XCB_STACK_MODE_ABOVE);
+	}
+	claim_focus(xwm, xs);
+}
+
+int xwm_close_windows(struct server *server) {
+	struct xwm *xwm = server->xwm;
+	if (xwm == NULL)
+		return 0;
+
+	xwm->closing = true;
+	int count = 0;
+	struct xwindow *win;
+	wl_list_for_each(win, &xwm->windows, link) {
+		struct wlr_xwayland_surface *xs = win->xs;
+		if (xs->override_redirect || xs->surface == NULL || !xs->surface->mapped)
+			continue;
+		wlr_xwayland_surface_close(xs);
+		count++;
+	}
+	return count;
 }
 
 void xwm_pick_surface(struct server *server, double host_x, double host_y, struct wlr_surface **surface, double *out_x, double *out_y) {
@@ -234,31 +348,73 @@ void xwm_pick_surface(struct server *server, double host_x, double host_y, struc
 		return;
 
 	struct fit *fit = &server->fit;
-	double gx, gy;
-	if (fit->scale > 0.0) {
-		gx = (host_x - fit->x) / fit->scale;
-		gy = (host_y - fit->y) / fit->scale;
-	} else {
-		gx = host_x;
-		gy = host_y;
+	if (fit->scale <= 0.0)
+		return;
+
+	double origin_x = 0.0;
+	double origin_y = 0.0;
+	if (xwm->primary != NULL) {
+		origin_x = (double)xwm->primary->x;
+		origin_y = (double)xwm->primary->y;
 	}
+
+	double gx = (host_x - fit->x) / fit->scale;
+	double gy = (host_y - fit->y) / fit->scale;
 
 	struct xwindow *win;
 	wl_list_for_each_reverse(win, &xwm->windows, link) {
 		struct wlr_xwayland_surface *xs = win->xs;
 		if (!xs->override_redirect || xs->surface == NULL || !xs->surface->mapped)
 			continue;
-		if (gx < (double)xs->x || gy < (double)xs->y ||
-			gx >= (double)xs->x + (double)xs->width ||
-			gy >= (double)xs->y + (double)xs->height)
-			continue;
-		*surface = xs->surface;
-		*out_x = gx - (double)xs->x;
-		*out_y = gy - (double)xs->y;
-		return;
+		double rx = (double)xs->x - origin_x;
+		double ry = (double)xs->y - origin_y;
+		double rw = xs->surface->current.width > 0 ? (double)xs->surface->current.width : (double)xs->width;
+		double rh = xs->surface->current.height > 0 ? (double)xs->surface->current.height : (double)xs->height;
+		if (gx >= rx && gy >= ry && gx < rx + rw && gy < ry + rh) {
+			*surface = xs->surface;
+			*out_x = gx - rx;
+			*out_y = gy - ry;
+			return;
+		}
 	}
 
-	if (xwm->game == NULL || xwm->game->surface == NULL || !xwm->game->surface->mapped)
+	wl_list_for_each_reverse(win, &xwm->windows, link) {
+		struct wlr_xwayland_surface *xs = win->xs;
+		if (xs->override_redirect || xs->surface == NULL || !xs->surface->mapped)
+			continue;
+		if (xs->parent == NULL && !xs->modal)
+			continue;
+		double rx = (double)xs->x - origin_x;
+		double ry = (double)xs->y - origin_y;
+		double rw = xs->surface->current.width > 0 ? (double)xs->surface->current.width : (double)xs->width;
+		double rh = xs->surface->current.height > 0 ? (double)xs->surface->current.height : (double)xs->height;
+		if (gx >= rx && gy >= ry && gx < rx + rw && gy < ry + rh) {
+			*surface = xs->surface;
+			*out_x = gx - rx;
+			*out_y = gy - ry;
+			return;
+		}
+	}
+
+	wl_list_for_each_reverse(win, &xwm->windows, link) {
+		struct wlr_xwayland_surface *xs = win->xs;
+		if (xs->override_redirect || xs->surface == NULL || !xs->surface->mapped)
+			continue;
+		if (xs->parent != NULL || xs->modal)
+			continue;
+		double rx = (double)xs->x - origin_x;
+		double ry = (double)xs->y - origin_y;
+		double rw = xs->surface->current.width > 0 ? (double)xs->surface->current.width : (double)xs->width;
+		double rh = xs->surface->current.height > 0 ? (double)xs->surface->current.height : (double)xs->height;
+		if (gx >= rx && gy >= ry && gx < rx + rw && gy < ry + rh) {
+			*surface = xs->surface;
+			*out_x = gx - rx;
+			*out_y = gy - ry;
+			return;
+		}
+	}
+
+	if (xwm->primary == NULL || xwm->primary->surface == NULL || !xwm->primary->surface->mapped)
 		return;
 
 	int gw, gh;
@@ -275,7 +431,7 @@ void xwm_pick_surface(struct server *server, double host_x, double host_y, struc
 		if (gy >= h)
 			gy = h - 0.01;
 	}
-	*surface = xwm->game->surface;
+	*surface = xwm->primary->surface;
 	*out_x = gx;
 	*out_y = gy;
 }
@@ -323,22 +479,42 @@ void xwm_draw(struct server *server, struct wlr_render_pass *pass, int width, in
 		return;
 
 	struct fit *fit = &server->fit;
+	if (fit->scale <= 0.0)
+		return;
+
 	struct wlr_surface *drawn[MAX_DRAWN_SURFACES];
 	int ndrawn = 0;
 
 	double origin_x = 0.0;
 	double origin_y = 0.0;
-	if (xwm->game != NULL && xwm->game->surface != NULL) {
-		struct wlr_xwayland_surface *xs = xwm->game;
-		origin_x = (double)xs->x;
-		origin_y = (double)xs->y;
-	}
-
-	if (xwm->game != NULL && xwm->game->surface != NULL && xwm->game->surface->mapped && fit->scale > 0.0) {
-		draw_surface_tree(pass, xwm->game->surface, fit->x, fit->y, fit->scale, drawn, &ndrawn);
+	if (xwm->primary != NULL) {
+		origin_x = (double)xwm->primary->x;
+		origin_y = (double)xwm->primary->y;
 	}
 
 	struct xwindow *win;
+	wl_list_for_each(win, &xwm->windows, link) {
+		struct wlr_xwayland_surface *xs = win->xs;
+		if (xs->override_redirect || xs->surface == NULL || !xs->surface->mapped)
+			continue;
+		if (xs->parent != NULL || xs->modal)
+			continue;
+		double x = fit->x + ((double)xs->x - origin_x) * fit->scale;
+		double y = fit->y + ((double)xs->y - origin_y) * fit->scale;
+		draw_surface_tree(pass, xs->surface, x, y, fit->scale, drawn, &ndrawn);
+	}
+
+	wl_list_for_each(win, &xwm->windows, link) {
+		struct wlr_xwayland_surface *xs = win->xs;
+		if (xs->override_redirect || xs->surface == NULL || !xs->surface->mapped)
+			continue;
+		if (xs->parent == NULL && !xs->modal)
+			continue;
+		double x = fit->x + ((double)xs->x - origin_x) * fit->scale;
+		double y = fit->y + ((double)xs->y - origin_y) * fit->scale;
+		draw_surface_tree(pass, xs->surface, x, y, fit->scale, drawn, &ndrawn);
+	}
+
 	wl_list_for_each(win, &xwm->windows, link) {
 		struct wlr_xwayland_surface *xs = win->xs;
 		if (!xs->override_redirect || xs->surface == NULL || !xs->surface->mapped)

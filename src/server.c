@@ -146,6 +146,8 @@ static void server_update_fit(struct server *s, int width, int height) {
 		return;
 	}
 
+	server_update_output_mode(s, game_w, game_h);
+
 	double scale = (double)width / (double)game_w;
 	double scale_y = (double)height / (double)game_h;
 	if (scale_y < scale)
@@ -338,6 +340,8 @@ void server_pointer_button(struct dynscope *ds, uint32_t time_msec, uint32_t but
 	dynscope_log_debug("dynscope: server button %u state=%u ptr_surface=%p\n", button, state, (void *)s->pointer_surface);
 	if (s->pointer_surface == NULL)
 		return;
+	if (state == WL_POINTER_BUTTON_STATE_PRESSED)
+		xwm_surface_activate(s, s->pointer_surface);
 	wlr_seat_pointer_notify_button(s->seat, time_msec, button, (enum wl_pointer_button_state)state);
 	wlr_seat_pointer_notify_frame(s->seat);
 }
@@ -794,3 +798,24 @@ void server_finish(struct dynscope *ds) {
 	}
 	free(s);
 }
+
+void server_update_output_mode(struct server *s, int width, int height) {
+	if (s == NULL || s->output == NULL || width <= 0 || height <= 0)
+		return;
+	if (s->output->width == width && s->output->height == height)
+		return;
+	struct wlr_output_state state;
+	wlr_output_state_init(&state);
+	wlr_output_state_set_custom_mode(&state, width, height, 0);
+	if (wlr_output_commit_state(s->output, &state))
+		dynscope_log_debug("dynscope: virtual output mode updated to %dx%d\n", width, height);
+	wlr_output_state_finish(&state);
+}
+
+int server_request_close(struct dynscope *ds) {
+	struct server *s = ds->server;
+	if (s == NULL)
+		return 0;
+	return xwm_close_windows(s);
+}
+

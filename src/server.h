@@ -136,4 +136,8 @@ void server_keyboard_modifiers(struct dynscope *ds, uint32_t depressed, uint32_t
 
 void server_host_selection(struct dynscope *ds, bool primary, const char *data, size_t len);
 
+void server_update_output_mode(struct server *server, int width, int height);
+int server_request_close(struct dynscope *ds);
+
 #endif
+
