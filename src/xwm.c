@@ -43,8 +43,9 @@ struct xwm {
 static void keyboard_focus(struct xwm *xwm, struct wlr_xwayland_surface *xs) {
 	if (xs == NULL || xs->surface == NULL)
 		return;
+	struct wlr_keyboard *keyboard = &xwm->server->keyboard;
 	wlr_xwayland_surface_activate(xs, true);
-	wlr_seat_keyboard_notify_enter(xwm->server->seat, xs->surface, NULL, 0, NULL);
+	wlr_seat_keyboard_notify_enter(xwm->server->seat, xs->surface, keyboard->keycodes, keyboard->num_keycodes, &keyboard->modifiers);
 	server_constrain_focused(xwm->server);
 }
 

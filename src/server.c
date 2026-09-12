@@ -451,10 +451,21 @@ void server_keyboard_focus(struct dynscope *ds, bool focused) {
 	struct server *s = ds->server;
 	if (s == NULL)
 		return;
-	if (focused)
+	if (focused) {
 		server_constrain_focused(s);
-	else
+	} else {
 		server_constrain(s, NULL);
+		while (s->keyboard.num_keycodes > 0) {
+			uint32_t key = s->keyboard.keycodes[s->keyboard.num_keycodes - 1];
+			struct wlr_keyboard_key_event event = {
+				.keycode = key,
+				.state = WL_KEYBOARD_KEY_STATE_RELEASED,
+				.update_state = false,
+			};
+			wlr_keyboard_notify_key(&s->keyboard, &event);
+			wlr_seat_keyboard_notify_key(s->seat, 0, key, WL_KEYBOARD_KEY_STATE_RELEASED);
+		}
+	}
 }
 
 void server_update_lock(struct server *s) {
@@ -529,20 +540,20 @@ void server_keyboard_keymap(struct dynscope *ds, const char *keymap_string) {
 	xkb_keymap_unref(keymap);
 }
 
-void server_keyboard_key(struct dynscope *ds, uint32_t key, bool pressed) {
+void server_keyboard_key(struct dynscope *ds, uint32_t time_msec, uint32_t key, bool pressed) {
 	struct server *s = ds->server;
 	if (s == NULL)
 		return;
 	dynscope_log_debug("dynscope: server key %u %s\n", key, pressed ? "down" : "up");
 
 	struct wlr_keyboard_key_event event = {
+		.time_msec = time_msec,
 		.keycode = key,
-		.update_state = true,
+		.update_state = false,
 		.state = pressed ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED,
 	};
 	wlr_keyboard_notify_key(&s->keyboard, &event);
-	wlr_seat_set_keyboard(s->seat, &s->keyboard);
-	wlr_seat_keyboard_notify_key(s->seat, event.time_msec, key, event.state);
+	wlr_seat_keyboard_notify_key(s->seat, time_msec, key, event.state);
 }
 
 void server_keyboard_modifiers(struct dynscope *ds, uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group) {
@@ -550,6 +561,14 @@ void server_keyboard_modifiers(struct dynscope *ds, uint32_t depressed, uint32_t
 	if (s == NULL)
 		return;
 	wlr_keyboard_notify_modifiers(&s->keyboard, depressed, latched, locked, group);
+	wlr_seat_keyboard_notify_modifiers(s->seat, &s->keyboard.modifiers);
+}
+
+void server_keyboard_repeat_info(struct dynscope *ds, int32_t rate, int32_t delay) {
+	struct server *s = ds->server;
+	if (s == NULL)
+		return;
+	wlr_keyboard_set_repeat_info(&s->keyboard, rate, delay);
 }
 
 const char *server_display_name(struct dynscope *ds) {

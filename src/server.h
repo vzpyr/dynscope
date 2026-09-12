@@ -132,8 +132,9 @@ void server_keyboard_focus(struct dynscope *ds, bool focused);
 void server_update_lock(struct server *server);
 
 void server_keyboard_keymap(struct dynscope *ds, const char *keymap_string);
-void server_keyboard_key(struct dynscope *ds, uint32_t key, bool pressed);
+void server_keyboard_key(struct dynscope *ds, uint32_t time_msec, uint32_t key, bool pressed);
 void server_keyboard_modifiers(struct dynscope *ds, uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group);
+void server_keyboard_repeat_info(struct dynscope *ds, int32_t rate, int32_t delay);
 
 void server_host_selection(struct dynscope *ds, bool primary, const char *data, size_t len);
 

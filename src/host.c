@@ -476,11 +476,14 @@ static void keyboard_handle_enter(void *data, struct wl_keyboard *keyboard, uint
 	struct host *host = data;
 	(void)keyboard;
 	(void)surface;
-	(void)keys;
 	host->keyboard_entered = true;
 	host->keyboard_enter_serial = serial;
 	host->last_event_serial = serial;
 	server_keyboard_focus(host->ds, true);
+	uint32_t *key;
+	wl_array_for_each(key, keys) {
+		server_keyboard_key(host->ds, 0, *key, true);
+	}
 	host_apply_cursor_impl(host);
 }
 
@@ -497,9 +500,8 @@ static void keyboard_handle_leave(void *data, struct wl_keyboard *keyboard, uint
 static void keyboard_handle_key(void *data, struct wl_keyboard *keyboard, uint32_t serial, uint32_t time, uint32_t key, uint32_t state) {
 	struct host *host = data;
 	(void)keyboard;
-	(void)time;
 	host->last_event_serial = serial;
-	server_keyboard_key(host->ds, key, state == WL_KEYBOARD_KEY_STATE_PRESSED);
+	server_keyboard_key(host->ds, time, key, state == WL_KEYBOARD_KEY_STATE_PRESSED);
 }
 
 static void keyboard_handle_modifiers(void *data, struct wl_keyboard *keyboard, uint32_t serial, uint32_t mods_depressed, uint32_t mods_latched, uint32_t mods_locked, uint32_t group) {
@@ -510,10 +512,9 @@ static void keyboard_handle_modifiers(void *data, struct wl_keyboard *keyboard, 
 }
 
 static void keyboard_handle_repeat_info(void *data, struct wl_keyboard *keyboard, int32_t rate, int32_t delay) {
-	(void)data;
+	struct host *host = data;
 	(void)keyboard;
-	(void)rate;
-	(void)delay;
+	server_keyboard_repeat_info(host->ds, rate, delay);
 }
 
 static const struct wl_keyboard_listener keyboard_listener = {
