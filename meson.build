@@ -7,6 +7,7 @@ project(
     'c_std=c11',
     'warning_level=3',
     'werror=true',
+    'default_library=static',
   ],
 )
 
@@ -18,7 +19,10 @@ wayland_protos_dep = dependency('wayland-protocols')
 glesv2_dep = dependency('glesv2')
 xkbcommon_dep = dependency('xkbcommon')
 
-wlroots_proj = subproject('wlroots')
+wlroots_proj = subproject(
+  'wlroots',
+  default_options: ['default_library=static', 'examples=false'],
+)
 wlroots_dep = wlroots_proj.get_variable('wlroots')
 
 wayland_scanner = find_program('wayland-scanner')
