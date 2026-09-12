@@ -608,6 +608,38 @@ static void handle_new_surface(struct wl_listener *listener, void *data) {
 	wl_signal_add(&surface->events.destroy, &ss->destroy);
 }
 
+struct mode_entry {
+	int width;
+	int height;
+};
+
+static const struct mode_entry common_modes[] = {
+	{5120, 1440},
+	{3840, 2160},
+	{3840, 1600},
+	{3440, 1440},
+	{2560, 1440},
+	{2560, 1080},
+	{1920, 1080},
+	{1720, 1440},
+	{1280, 720},
+};
+
+static void handle_output_bind(struct wl_listener *listener, void *data) {
+	struct server *s = wl_container_of(listener, s, output_bind);
+	struct wlr_output_event_bind *event = data;
+	int refresh = s->ds != NULL && s->ds->host_refresh > 0 ? s->ds->host_refresh : 60000;
+	for (size_t i = 0; i < sizeof(common_modes) / sizeof(common_modes[0]); i++) {
+		if (common_modes[i].width <= s->output->width && common_modes[i].height <= s->output->height) {
+			if (common_modes[i].width != s->output->width || common_modes[i].height != s->output->height)
+				wl_output_send_mode(event->resource, 0, common_modes[i].width, common_modes[i].height, refresh);
+		}
+	}
+	uint32_t version = wl_resource_get_version(event->resource);
+	if (version >= WL_OUTPUT_DONE_SINCE_VERSION)
+		wl_output_send_done(event->resource);
+}
+
 int server_init(struct dynscope *ds) {
 	struct server *s = calloc(1, sizeof(*s));
 	if (s == NULL) {
@@ -721,7 +753,11 @@ int server_init(struct dynscope *ds) {
 		goto fail;
 	}
 
-	s->output = wlr_headless_add_output(s->backend, DEFAULT_WIDTH, DEFAULT_HEIGHT);
+	int initial_width = ds->host_width > 0 ? ds->host_width : DEFAULT_WIDTH;
+	int initial_height = ds->host_height > 0 ? ds->host_height : DEFAULT_HEIGHT;
+	int initial_refresh = ds->host_refresh > 0 ? ds->host_refresh : 60000;
+
+	s->output = wlr_headless_add_output(s->backend, initial_width, initial_height);
 	if (s->output == NULL) {
 		fprintf(stderr, "dynscope: failed to create virtual output\n");
 		goto fail;
@@ -730,13 +766,16 @@ int server_init(struct dynscope *ds) {
 	struct wlr_output_state output_state;
 	wlr_output_state_init(&output_state);
 	wlr_output_state_set_enabled(&output_state, true);
-	wlr_output_state_set_custom_mode(&output_state, DEFAULT_WIDTH, DEFAULT_HEIGHT, 0);
+	wlr_output_state_set_custom_mode(&output_state, initial_width, initial_height, initial_refresh);
 	if (!wlr_output_commit_state(s->output, &output_state)) {
 		wlr_output_state_finish(&output_state);
 		fprintf(stderr, "dynscope: failed to commit virtual output\n");
 		goto fail;
 	}
 	wlr_output_state_finish(&output_state);
+
+	s->output_bind.notify = handle_output_bind;
+	wl_signal_add(&s->output->events.bind, &s->output_bind);
 
 	s->layout = wlr_output_layout_create(s->display);
 	if (s->layout == NULL) {
@@ -777,6 +816,7 @@ void server_finish(struct dynscope *ds) {
 	clipboard_finish(s);
 	wl_list_remove(&s->new_surface.link);
 	wl_list_remove(&s->new_constraint.link);
+	wl_list_remove(&s->output_bind.link);
 	if (s->xwayland != NULL) {
 		wl_list_remove(&s->xwayland_destroy.link);
 		wl_list_remove(&s->xwayland_ready.link);
@@ -800,9 +840,10 @@ void server_update_output_mode(struct server *s, int width, int height) {
 		return;
 	if (s->output->width == width && s->output->height == height)
 		return;
+	int refresh = s->ds != NULL && s->ds->host_refresh > 0 ? s->ds->host_refresh : 60000;
 	struct wlr_output_state state;
 	wlr_output_state_init(&state);
-	wlr_output_state_set_custom_mode(&state, width, height, 0);
+	wlr_output_state_set_custom_mode(&state, width, height, refresh);
 	if (wlr_output_commit_state(s->output, &state))
 		dynscope_log_debug("dynscope: virtual output mode updated to %dx%d\n", width, height);
 	wlr_output_state_finish(&state);

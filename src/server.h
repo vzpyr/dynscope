@@ -84,6 +84,7 @@ struct server {
 	struct wlr_data_device_manager *data_device;
 	struct wlr_output *output;
 	struct wlr_output_layout *layout;
+	struct wl_listener output_bind;
 	struct wlr_xwayland *xwayland;
 	struct wl_listener xwayland_destroy;
 	struct wl_listener xwayland_ready;

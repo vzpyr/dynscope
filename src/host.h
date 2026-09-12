@@ -6,6 +6,7 @@
 
 struct dynscope;
 
+int host_detect_monitor(int *width, int *height, int *refresh_mhz);
 int host_open(struct dynscope *ds);
 void host_close(struct dynscope *ds);
 void host_flush(struct dynscope *ds);

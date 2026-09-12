@@ -393,8 +393,10 @@ static void xdg_surface_handle_configure(void *data, struct xdg_surface *xdg_sur
 
 	if (!host->configured) {
 		host->configured = true;
-		host->width = host->pending_width > 0 ? host->pending_width : DEFAULT_WIDTH;
-		host->height = host->pending_height > 0 ? host->pending_height : DEFAULT_HEIGHT;
+		int def_w = host->ds != NULL && host->ds->host_width > 0 ? host->ds->host_width : DEFAULT_WIDTH;
+		int def_h = host->ds != NULL && host->ds->host_height > 0 ? host->ds->host_height : DEFAULT_HEIGHT;
+		host->width = host->pending_width > 0 ? host->pending_width : def_w;
+		host->height = host->pending_height > 0 ? host->pending_height : def_h;
 	} else {
 		if (host->pending_width > 0)
 			host->width = host->pending_width;
@@ -1535,4 +1537,121 @@ void host_close(struct dynscope *ds) {
 		wl_display_disconnect(host->display);
 	host_cursor_clear_buffer(&host->cursor);
 	free(host);
+}
+
+struct detect_output_data {
+	int width;
+	int height;
+	int refresh;
+};
+
+static void detect_output_handle_geometry(void *data, struct wl_output *wl_output, int32_t x, int32_t y, int32_t physical_width, int32_t physical_height, int32_t subpixel, const char *make, const char *model, int32_t transform) {
+	(void)data;
+	(void)wl_output;
+	(void)x;
+	(void)y;
+	(void)physical_width;
+	(void)physical_height;
+	(void)subpixel;
+	(void)make;
+	(void)model;
+	(void)transform;
+}
+
+static void detect_output_handle_mode(void *data, struct wl_output *wl_output, uint32_t flags, int32_t width, int32_t height, int32_t refresh) {
+	(void)wl_output;
+	struct detect_output_data *od = data;
+	if ((flags & WL_OUTPUT_MODE_CURRENT) != 0) {
+		uint64_t current_area = (uint64_t)od->width * (uint64_t)od->height;
+		uint64_t new_area = (uint64_t)width * (uint64_t)height;
+		if (new_area >= current_area) {
+			od->width = (int)width;
+			od->height = (int)height;
+			od->refresh = (int)refresh;
+		}
+	}
+}
+
+static void detect_output_handle_done(void *data, struct wl_output *wl_output) {
+	(void)data;
+	(void)wl_output;
+}
+
+static void detect_output_handle_scale(void *data, struct wl_output *wl_output, int32_t factor) {
+	(void)data;
+	(void)wl_output;
+	(void)factor;
+}
+
+static void detect_output_handle_name(void *data, struct wl_output *wl_output, const char *name) {
+	(void)data;
+	(void)wl_output;
+	(void)name;
+}
+
+static void detect_output_handle_description(void *data, struct wl_output *wl_output, const char *description) {
+	(void)data;
+	(void)wl_output;
+	(void)description;
+}
+
+static const struct wl_output_listener detect_output_listener = {
+	.geometry = detect_output_handle_geometry,
+	.mode = detect_output_handle_mode,
+	.done = detect_output_handle_done,
+	.scale = detect_output_handle_scale,
+	.name = detect_output_handle_name,
+	.description = detect_output_handle_description,
+};
+
+static void detect_registry_handle_global(void *data, struct wl_registry *registry, uint32_t name, const char *interface, uint32_t version) {
+	struct detect_output_data *od = data;
+	if (strcmp(interface, wl_output_interface.name) == 0) {
+		uint32_t ver = version < 4 ? version : 4;
+		struct wl_output *output = wl_registry_bind(registry, name, &wl_output_interface, ver);
+		if (output != NULL)
+			wl_output_add_listener(output, &detect_output_listener, od);
+	}
+}
+
+static void detect_registry_handle_global_remove(void *data, struct wl_registry *registry, uint32_t name) {
+	(void)data;
+	(void)registry;
+	(void)name;
+}
+
+static const struct wl_registry_listener detect_registry_listener = {
+	.global = detect_registry_handle_global,
+	.global_remove = detect_registry_handle_global_remove,
+};
+
+int host_detect_monitor(int *width, int *height, int *refresh_mhz) {
+	*width = DEFAULT_WIDTH;
+	*height = DEFAULT_HEIGHT;
+	*refresh_mhz = 60000;
+
+	struct wl_display *display = wl_display_connect(NULL);
+	if (display == NULL)
+		return -1;
+
+	struct detect_output_data data = {0};
+	struct wl_registry *registry = wl_display_get_registry(display);
+	if (registry == NULL) {
+		wl_display_disconnect(display);
+		return -1;
+	}
+
+	wl_registry_add_listener(registry, &detect_registry_listener, &data);
+	wl_display_roundtrip(display);
+	wl_display_roundtrip(display);
+	wl_registry_destroy(registry);
+	wl_display_disconnect(display);
+
+	if (data.width > 0 && data.height > 0) {
+		*width = data.width;
+		*height = data.height;
+		*refresh_mhz = data.refresh > 0 ? data.refresh : 60000;
+		return 0;
+	}
+	return -1;
 }

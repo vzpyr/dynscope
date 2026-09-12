@@ -49,6 +49,9 @@ struct dynscope {
 	bool closing;
 	int exit_code;
 	int caught_signal;
+	int host_width;
+	int host_height;
+	int host_refresh;
 };
 
 void dynscope_close(struct dynscope *ds);

@@ -36,6 +36,8 @@ int main(int argc, char **argv) {
 		.running = true,
 	};
 
+	host_detect_monitor(&ds.host_width, &ds.host_height, &ds.host_refresh);
+
 	if (server_init(&ds) < 0)
 		return 1;
 
