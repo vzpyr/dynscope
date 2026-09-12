@@ -27,8 +27,6 @@ struct xwindow {
 	struct wl_listener dissociate;
 	struct wl_listener request_activate;
 	struct wl_listener request_configure;
-	struct wl_listener request_fullscreen;
-	struct wl_listener set_geometry;
 	struct wl_listener set_title;
 	struct wl_list link;
 };
@@ -119,8 +117,6 @@ static void handle_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&win->dissociate.link);
 	wl_list_remove(&win->request_activate.link);
 	wl_list_remove(&win->request_configure.link);
-	wl_list_remove(&win->request_fullscreen.link);
-	wl_list_remove(&win->set_geometry.link);
 	wl_list_remove(&win->set_title.link);
 	wl_list_remove(&win->link);
 	free(win);
@@ -163,15 +159,7 @@ static void handle_map_request(struct wl_listener *listener, void *data) {
 	int16_t x = xs->x;
 	int16_t y = xs->y;
 
-	if (xs->fullscreen && xs->width > 0 && xs->height > 0 && ((int)xs->width != sw || (int)xs->height != sh)) {
-		server_update_output_mode(xwm->server, (int)xs->width, (int)xs->height);
-		sw = (int)xs->width;
-		sh = (int)xs->height;
-		w = xs->width;
-		h = xs->height;
-		x = 0;
-		y = 0;
-	} else if (xs->fullscreen || (xs->width == 0 && xs->height == 0) || (w >= (uint16_t)sw && h >= (uint16_t)sh)) {
+	if (xs->fullscreen || (xs->width == 0 && xs->height == 0) || (w >= (uint16_t)sw && h >= (uint16_t)sh)) {
 		x = 0;
 		y = 0;
 		w = (uint16_t)sw;
@@ -239,32 +227,11 @@ static void handle_request_configure(struct wl_listener *listener, void *data) {
 	struct wlr_xwayland_surface_configure_event *event = data;
 	struct xwm *xwm = win->xwm;
 
-	if (win->xs->fullscreen && event->width > 0 && event->height > 0) {
-		server_update_output_mode(xwm->server, (int)event->width, (int)event->height);
-		wlr_xwayland_surface_configure(win->xs, 0, 0, event->width, event->height);
-	} else {
-		wlr_xwayland_surface_configure(win->xs, event->x, event->y, event->width, event->height);
-	}
+	wlr_xwayland_surface_configure(win->xs, event->x, event->y, event->width, event->height);
 	dynscope_log_debug("dynscope: window %p configure request %ux%u at %d,%d\n", (void *)win->xs, event->width, event->height, event->x, event->y);
-}
 
-static void handle_request_fullscreen(struct wl_listener *listener, void *data) {
-	struct xwindow *win = wl_container_of(listener, win, request_fullscreen);
-	(void)data;
-	struct xwm *xwm = win->xwm;
-	wlr_xwayland_surface_set_fullscreen(win->xs, win->xs->fullscreen);
-	if (win->xs->fullscreen && win->xs->width > 0 && win->xs->height > 0) {
-		server_update_output_mode(xwm->server, (int)win->xs->width, (int)win->xs->height);
-		wlr_xwayland_surface_configure(win->xs, 0, 0, win->xs->width, win->xs->height);
-	}
-}
-
-static void handle_set_geometry(struct wl_listener *listener, void *data) {
-	struct xwindow *win = wl_container_of(listener, win, set_geometry);
-	(void)data;
-	struct xwm *xwm = win->xwm;
-	if (win->xs == xwm->focus && win->xs->fullscreen && win->xs->width > 0 && win->xs->height > 0)
-		server_update_output_mode(xwm->server, (int)win->xs->width, (int)win->xs->height);
+	if (win->xs == xwm->focus && win->xs->fullscreen && event->width > 0 && event->height > 0)
+		server_update_output_mode(xwm->server, (int)event->width, (int)event->height);
 }
 
 static void handle_set_title(struct wl_listener *listener, void *data) {
@@ -301,10 +268,6 @@ static void handle_new_surface(struct wl_listener *listener, void *data) {
 	wl_signal_add(&xs->events.request_activate, &win->request_activate);
 	win->request_configure.notify = handle_request_configure;
 	wl_signal_add(&xs->events.request_configure, &win->request_configure);
-	win->request_fullscreen.notify = handle_request_fullscreen;
-	wl_signal_add(&xs->events.request_fullscreen, &win->request_fullscreen);
-	win->set_geometry.notify = handle_set_geometry;
-	wl_signal_add(&xs->events.set_geometry, &win->set_geometry);
 	win->set_title.notify = handle_set_title;
 	wl_signal_add(&xs->events.set_title, &win->set_title);
 	wl_list_insert(xwm->windows.prev, &win->link);
@@ -532,8 +495,6 @@ void xwm_finish(struct server *server) {
 		wl_list_remove(&win->dissociate.link);
 		wl_list_remove(&win->request_activate.link);
 		wl_list_remove(&win->request_configure.link);
-		wl_list_remove(&win->request_fullscreen.link);
-		wl_list_remove(&win->set_geometry.link);
 		wl_list_remove(&win->set_title.link);
 		free(win);
 	}
