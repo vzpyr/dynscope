@@ -42,9 +42,9 @@ struct pending_axis {
 	double value;
 	int32_t discrete;
 	bool have;
-	uint32_t source;
+	bool has_value120;
 	uint32_t time;
-	uint32_t axis;
+	uint32_t relative_direction;
 };
 
 struct host_read {
@@ -115,7 +115,8 @@ struct host {
 	uint32_t last_event_serial;
 	struct wl_array outstanding;
 	struct host_cursor cursor;
-	struct pending_axis pending_axis;
+	struct pending_axis pending_axis[2];
+	uint32_t pending_axis_source;
 	uint32_t pointer_enter_serial;
 
 	struct wl_event_source *fd_src;
@@ -164,7 +165,7 @@ static void registry_handle_global(void *data, struct wl_registry *registry, uin
 	else if (strcmp(interface, wp_cursor_shape_manager_v1_interface.name) == 0)
 		host->cursor_shape_manager = wl_registry_bind(registry, name, &wp_cursor_shape_manager_v1_interface, version < 1u ? version : 1u);
 	else if (strcmp(interface, wl_seat_interface.name) == 0)
-		host->seat = wl_registry_bind(registry, name, &wl_seat_interface, version < 8u ? version : 8u);
+		host->seat = wl_registry_bind(registry, name, &wl_seat_interface, version < 9u ? version : 9u);
 	else if (strcmp(interface, xdg_wm_base_interface.name) == 0)
 		host->wm_base = wl_registry_bind(registry, name, &xdg_wm_base_interface, version < (uint32_t)xdg_wm_base_interface.version ? version : (uint32_t)xdg_wm_base_interface.version);
 	else if (strcmp(interface, zwp_linux_dmabuf_v1_interface.name) == 0)
@@ -576,47 +577,68 @@ static void pointer_handle_axis(void *data, struct wl_pointer *pointer, uint32_t
 	(void)pointer;
 	if (axis > 1)
 		return;
-	host->pending_axis.value = wl_fixed_to_double(value);
-	host->pending_axis.have = true;
-	host->pending_axis.time = time;
-	host->pending_axis.axis = axis;
+	host->pending_axis[axis].value += wl_fixed_to_double(value);
+	host->pending_axis[axis].time = time;
+	host->pending_axis[axis].have = true;
 }
 
 static void pointer_handle_frame(void *data, struct wl_pointer *pointer) {
 	struct host *host = data;
 	(void)pointer;
-	if (host->pending_axis.have) {
-		server_pointer_axis(host->ds, host->pending_axis.time, host->pending_axis.axis, host->pending_axis.value, host->pending_axis.discrete, host->pending_axis.source);
-		host->pending_axis.have = false;
-		host->pending_axis.discrete = 0;
+	for (uint32_t i = 0; i < 2; i++) {
+		if (host->pending_axis[i].have) {
+			if (host->pending_axis[i].discrete != 0 && host->pending_axis[i].value == 0.0)
+				host->pending_axis[i].value = (host->pending_axis[i].discrete > 0 ? 15.0 : -15.0);
+			server_pointer_axis(host->ds, host->pending_axis[i].time, i, host->pending_axis[i].value, host->pending_axis[i].discrete, host->pending_axis_source, host->pending_axis[i].relative_direction);
+			memset(&host->pending_axis[i], 0, sizeof(host->pending_axis[i]));
+		}
 	}
 }
 
 static void pointer_handle_axis_source(void *data, struct wl_pointer *pointer, uint32_t axis_source) {
 	struct host *host = data;
 	(void)pointer;
-	host->pending_axis.source = axis_source;
+	host->pending_axis_source = axis_source;
 }
 
 static void pointer_handle_axis_stop(void *data, struct wl_pointer *pointer, uint32_t time, uint32_t axis) {
-	(void)data;
+	struct host *host = data;
 	(void)pointer;
-	(void)time;
-	(void)axis;
+	if (axis > 1)
+		return;
+	host->pending_axis[axis].time = time;
+	host->pending_axis[axis].value = 0.0;
+	host->pending_axis[axis].discrete = 0;
+	host->pending_axis[axis].have = true;
 }
 
 static void pointer_handle_axis_discrete(void *data, struct wl_pointer *pointer, uint32_t axis, int32_t discrete) {
 	struct host *host = data;
 	(void)pointer;
-	(void)axis;
-	host->pending_axis.discrete += discrete;
+	if (axis > 1)
+		return;
+	if (!host->pending_axis[axis].has_value120)
+		host->pending_axis[axis].discrete += discrete * 120;
 }
 
 static void pointer_handle_axis_value120(void *data, struct wl_pointer *pointer, uint32_t axis, int32_t value120) {
 	struct host *host = data;
 	(void)pointer;
-	(void)axis;
-	host->pending_axis.discrete += value120 / 120;
+	if (axis > 1)
+		return;
+	if (!host->pending_axis[axis].has_value120) {
+		host->pending_axis[axis].discrete = 0;
+		host->pending_axis[axis].has_value120 = true;
+	}
+	host->pending_axis[axis].discrete += value120;
+}
+
+static void pointer_handle_axis_relative_direction(void *data, struct wl_pointer *pointer, uint32_t axis, uint32_t direction) {
+	struct host *host = data;
+	(void)pointer;
+	if (axis > 1)
+		return;
+	host->pending_axis[axis].relative_direction = direction;
 }
 
 static const struct wl_pointer_listener pointer_listener = {
@@ -630,6 +652,7 @@ static const struct wl_pointer_listener pointer_listener = {
 	.axis_stop = pointer_handle_axis_stop,
 	.axis_discrete = pointer_handle_axis_discrete,
 	.axis_value120 = pointer_handle_axis_value120,
+	.axis_relative_direction = pointer_handle_axis_relative_direction,
 };
 
 static void locked_pointer_handle_locked(void *data, struct zwp_locked_pointer_v1 *locked_pointer) {

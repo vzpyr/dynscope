@@ -342,11 +342,12 @@ void server_pointer_button(struct dynscope *ds, uint32_t time_msec, uint32_t but
 	wlr_seat_pointer_notify_frame(s->seat);
 }
 
-void server_pointer_axis(struct dynscope *ds, uint32_t time_msec, uint32_t orientation, double value, int32_t value_discrete, uint32_t source) {
+void server_pointer_axis(struct dynscope *ds, uint32_t time_msec, uint32_t orientation, double value, int32_t value_discrete, uint32_t source, uint32_t relative_direction) {
 	struct server *s = ds->server;
 	if (s == NULL || s->pointer_surface == NULL)
 		return;
-	wlr_seat_pointer_notify_axis(s->seat, time_msec, (enum wl_pointer_axis)orientation, value, value_discrete, (enum wl_pointer_axis_source)source, WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL);
+	dynscope_log_debug("dynscope: pointer axis %u val=%.2f disc=%d src=%u\n", orientation, value, value_discrete, source);
+	wlr_seat_pointer_notify_axis(s->seat, time_msec, (enum wl_pointer_axis)orientation, value, value_discrete, (enum wl_pointer_axis_source)source, (enum wl_pointer_axis_relative_direction)relative_direction);
 	wlr_seat_pointer_notify_frame(s->seat);
 }
 

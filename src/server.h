@@ -125,7 +125,7 @@ void server_pointer_motion(struct dynscope *ds, uint32_t time_msec, double host_
 void server_pointer_leave(struct dynscope *ds);
 void server_pointer_rel_motion(struct dynscope *ds, uint32_t time_msec, uint64_t time_usec, double dx, double dy);
 void server_pointer_button(struct dynscope *ds, uint32_t time_msec, uint32_t button, uint32_t state);
-void server_pointer_axis(struct dynscope *ds, uint32_t time_msec, uint32_t orientation, double value, int32_t value_discrete, uint32_t source);
+void server_pointer_axis(struct dynscope *ds, uint32_t time_msec, uint32_t orientation, double value, int32_t value_discrete, uint32_t source, uint32_t relative_direction);
 
 void server_constrain_focused(struct server *server);
 void server_keyboard_focus(struct dynscope *ds, bool focused);
