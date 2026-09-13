@@ -208,8 +208,7 @@ int xcursor_init(struct server *server) {
 		return -1;
 	xc->server = server;
 	server->xcursor = xc;
-
-	fprintf(stderr, "dynscope: xcursor connecting to %s\n", server->xwayland->display_name);
+	dynscope_log_debug("dynscope: xcursor connecting to %s\n", server->xwayland->display_name);
 	xc->conn = xcb_connect(server->xwayland->display_name, NULL);
 	if (xcb_connection_has_error(xc->conn)) {
 		fprintf(stderr, "dynscope: failed to connect to Xwayland for cursor tracking\n");
@@ -240,11 +239,11 @@ int xcursor_init(struct server *server) {
 	xcb_xfixes_select_cursor_input(xc->conn, xc->screen->root, XCB_XFIXES_CURSOR_NOTIFY_MASK_DISPLAY_CURSOR);
 	xcb_generic_error_t *err = xcb_request_check(xc->conn, xcb_xfixes_select_cursor_input_checked(xc->conn, xc->screen->root, XCB_XFIXES_CURSOR_NOTIFY_MASK_DISPLAY_CURSOR));
 	if (err != NULL) {
-		fprintf(stderr, "dynscope: select_cursor_input failed: %u\n", err->error_code);
+		fprintf(stderr, "dynscope: select cursor input failed: %u\n", err->error_code);
 		free(err);
 	}
 	xcb_flush(xc->conn);
-	fprintf(stderr, "dynscope: xcursor init done\n");
+	dynscope_log_debug("dynscope: xcursor init done\n");
 
 	int fd = xcb_get_file_descriptor(xc->conn);
 	xc->fd_src = wl_event_loop_add_fd(server->ds->loop, fd, WL_EVENT_READABLE, xcursor_fd_event, xc);

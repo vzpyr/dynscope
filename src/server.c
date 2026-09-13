@@ -858,10 +858,24 @@ void server_finish(struct dynscope *ds) {
 		wl_list_remove(&s->xwayland_ready.link);
 		wlr_xwayland_destroy(s->xwayland);
 	}
+	frame_pool_resize(s, 0, 0);
+	struct game_constraint *gc, *tmp_gc;
+	wl_list_for_each_safe(gc, tmp_gc, &s->game_constraints, link) {
+		wl_list_remove(&gc->set_region.link);
+		wl_list_remove(&gc->destroy.link);
+		wl_list_remove(&gc->link);
+		free(gc);
+	}
 	pixman_region32_fini(&s->confine);
 	wlr_keyboard_finish(&s->keyboard);
 	if (s->xkb_context != NULL)
 		xkb_context_unref(s->xkb_context);
+	if (s->layout != NULL)
+		wlr_output_layout_destroy(s->layout);
+	if (s->allocator != NULL)
+		wlr_allocator_destroy(s->allocator);
+	if (s->renderer != NULL)
+		wlr_renderer_destroy(s->renderer);
 	if (s->backend != NULL)
 		wlr_backend_destroy(s->backend);
 	if (s->display != NULL) {

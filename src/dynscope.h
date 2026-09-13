@@ -61,7 +61,7 @@ static inline bool dynscope_debug_enabled(void) {
 	static int enabled = -1;
 	if (enabled < 0) {
 		const char *env = getenv("DYNSCOPE_DEBUG");
-		enabled = (env == NULL || strcmp(env, "0") != 0) ? 1 : 0;
+		enabled = (env != NULL && strcmp(env, "0") != 0 && strcmp(env, "") != 0) ? 1 : 0;
 	}
 	return enabled == 1;
 }

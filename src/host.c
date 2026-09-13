@@ -261,7 +261,6 @@ static void toplevel_handle_close(void *data, struct xdg_toplevel *toplevel) {
 		wl_event_source_timer_update(host->close_timer, 1500);
 }
 
-
 static void toplevel_handle_configure_bounds(void *data, struct xdg_toplevel *toplevel, int32_t width, int32_t height) {
 	(void)data;
 	(void)toplevel;
@@ -700,7 +699,6 @@ static void host_apply_cursor_impl(struct host *host) {
 
 	dynscope_log_debug("dynscope: apply cursor mode=%d serial=%u locked=%d kb=%d\n", cursor->mode, host->pointer_enter_serial, host->pointer_locked, host->keyboard_entered);
 
-	wl_display_dispatch_pending(host->display);
 	wl_display_flush(host->display);
 
 	if (host->pointer_locked) {
@@ -1301,8 +1299,6 @@ void host_set_title(struct dynscope *ds, const char *title) {
 	xdg_toplevel_set_title(host->toplevel, title);
 }
 
-
-
 void host_set_cursor(struct dynscope *ds, const void *pixels, int width, int height, int hotspot_x, int hotspot_y) {
 	struct host *host = ds->host;
 	if (host == NULL)
@@ -1485,6 +1481,10 @@ void host_close(struct dynscope *ds) {
 			wl_event_source_remove(read->src);
 		if (read->fd >= 0)
 			close(read->fd);
+		if (read->offer != NULL)
+			wl_data_offer_destroy(read->offer);
+		if (read->primary_offer != NULL)
+			zwp_primary_selection_offer_v1_destroy(read->primary_offer);
 		free(read->buf);
 	}
 	if (host->pending_clip_offer != NULL) {
@@ -1559,6 +1559,8 @@ struct detect_output_data {
 	int width;
 	int height;
 	int refresh;
+	struct wl_output *outputs[16];
+	int noutputs;
 };
 
 static void detect_output_handle_geometry(void *data, struct wl_output *wl_output, int32_t x, int32_t y, int32_t physical_width, int32_t physical_height, int32_t subpixel, const char *make, const char *model, int32_t transform) {
@@ -1625,8 +1627,13 @@ static void detect_registry_handle_global(void *data, struct wl_registry *regist
 	if (strcmp(interface, wl_output_interface.name) == 0) {
 		uint32_t ver = version < 4 ? version : 4;
 		struct wl_output *output = wl_registry_bind(registry, name, &wl_output_interface, ver);
-		if (output != NULL)
+		if (output != NULL) {
 			wl_output_add_listener(output, &detect_output_listener, od);
+			if (od->noutputs < 16)
+				od->outputs[od->noutputs++] = output;
+			else
+				wl_output_destroy(output);
+		}
 	}
 }
 
@@ -1660,6 +1667,8 @@ int host_detect_monitor(int *width, int *height, int *refresh_mhz) {
 	wl_registry_add_listener(registry, &detect_registry_listener, &data);
 	wl_display_roundtrip(display);
 	wl_display_roundtrip(display);
+	for (int i = 0; i < data.noutputs; i++)
+		wl_output_destroy(data.outputs[i]);
 	wl_registry_destroy(registry);
 	wl_display_disconnect(display);
 

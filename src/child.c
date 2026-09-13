@@ -104,6 +104,22 @@ static void child_finish(struct dynscope *ds, int wait_status) {
 		wl_event_source_remove(child->kill_timer);
 		child->kill_timer = NULL;
 	}
+	if (child->pid_src != NULL) {
+		wl_event_source_remove(child->pid_src);
+		child->pid_src = NULL;
+	}
+	if (child->status_src != NULL) {
+		wl_event_source_remove(child->status_src);
+		child->status_src = NULL;
+	}
+	if (child->pid_fd >= 0) {
+		close(child->pid_fd);
+		child->pid_fd = -1;
+	}
+	if (child->status_fd >= 0) {
+		close(child->status_fd);
+		child->status_fd = -1;
+	}
 
 	int code = 1;
 	if (wait_status >= 0 && WIFEXITED(wait_status)) {

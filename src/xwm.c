@@ -311,8 +311,17 @@ static void draw_surface_tree(struct wlr_render_pass *pass, struct wlr_surface *
 			wlr_render_pass_add_texture(pass, &options);
 		}
 	}
-	if (*ndrawn < MAX_DRAWN_SURFACES)
-		drawn[(*ndrawn)++] = surface;
+	if (*ndrawn < MAX_DRAWN_SURFACES) {
+		bool exists = false;
+		for (int i = 0; i < *ndrawn; i++) {
+			if (drawn[i] == surface) {
+				exists = true;
+				break;
+			}
+		}
+		if (!exists)
+			drawn[(*ndrawn)++] = surface;
+	}
 
 	wl_list_for_each(sub, &surface->current.subsurfaces_above, current.link) {
 		double sx = base_x + (double)sub->current.x * scale;
