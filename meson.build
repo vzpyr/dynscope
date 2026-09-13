@@ -7,6 +7,8 @@ project(
     'c_std=c11',
     'warning_level=3',
     'werror=true',
+    'buildtype=release',
+    'strip=true',
     'default_library=static',
   ],
 )

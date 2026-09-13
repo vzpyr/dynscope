@@ -2,3 +2,4 @@ build/
 subprojects/wlroots/
 subprojects/libliftoff/
 subprojects/.wraplock
+subprojects/libliftoff.wrap
