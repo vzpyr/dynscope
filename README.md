@@ -4,7 +4,7 @@ Lightweight nested Wayland compositor for games
 
 ## Features
 
-- Isolated nested session with rootless XWayland
+- Runs fullscreen and fixed-resolution games in freely resizable windows
 - Dynamic aspect ratio fitting and centering
 - Zero-copy DMA-BUF pipeline with explicit sync and frame pacing
 - Automatic pointer locking, confinement, and relative motion
@@ -12,14 +12,14 @@ Lightweight nested Wayland compositor for games
 - Live resolution switching without game restarts
 - Cursor passthrough with HiDPI and fractional scale support
 - Bidirectional clipboard and primary selection synchronization
-- Constrains stubborn fullscreen games into freely resizable windows
+- Isolated nested session with rootless XWayland
 
 ## Why not Gamescope?
 
-- Minimal C codebase with a lightweight dependency footprint
-- Dynamic canvas: automatically fits the game resolution instead of requiring fixed `-w` and `-h` flags
+- Minimal C codebase with a small dependency footprint
+- Dynamic canvas: automatically fits the game resolution instead of requiring `-w` and `-h` flags
 - Native window sizing: resize freely through your window manager instead of setting static `-W` and `-H` dimensions
-- Zero configuration: no flags, no wrappers, and no SDL
+- Zero configuration: no flags, config files, or launch wrappers
 
 ## Requirements
 
@@ -36,7 +36,7 @@ dynscope -- <command> [args...]
 
 ### Steam
 
-Set the game's launch options in Steam:
+Set the launch options in Steam:
 
 ```sh
 dynscope -- %command%
