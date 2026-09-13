@@ -44,7 +44,7 @@ dynscope -- %command%
 
 ## Building
 
-Dependencies: `meson`, `ninja`, `wayland-client`, `wayland-server`, `wayland-protocols`, `xkbcommon`, `pixman-1`, `xcb`, `xcb-xfixes`, `glesv2`, `egl`, `gbm`, `libdrm`
+Dependencies: `meson`, `ninja`, `egl`, `gbm`, `glesv2`, `libdrm`, `pixman-1`, `wayland-client`, `wayland-protocols`, `wayland-server`, `xcb`, `xcb-xfixes`, `xkbcommon`
 
 ```sh
 meson setup build
