@@ -13,7 +13,6 @@
 
 #include <wlr/backend/headless.h>
 #include <wlr/render/allocator.h>
-#include <wlr/render/drm_format_set.h>
 #include <wlr/render/gles2.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_compositor.h>
@@ -125,9 +124,6 @@ static void server_gpu_sync(struct server *s) {
 }
 
 static void server_update_fit(struct server *s, int width, int height) {
-	s->win_w = width;
-	s->win_h = height;
-
 	int game_w = 0;
 	int game_h = 0;
 	xwm_game_size(s, &game_w, &game_h);

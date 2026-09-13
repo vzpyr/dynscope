@@ -7,10 +7,6 @@
 #include <xcb/xcb.h>
 #include <xcb/xfixes.h>
 
-#include <drm_fourcc.h>
-#include <wlr/render/wlr_renderer.h>
-#include <wlr/render/wlr_texture.h>
-
 #include "dynscope.h"
 #include "host.h"
 #include "server.h"
@@ -19,23 +15,11 @@
 
 #define XCURSOR_MAX 256
 
-
-static void xcursor_clear_texture(struct xcursor *xc) {
-	if (xc->tex_valid)
-		wlr_texture_destroy(xc->texture);
-	xc->texture = NULL;
-	xc->tex_valid = false;
-	xc->tex_w = 0;
-	xc->tex_h = 0;
-}
-
-static void xcursor_update_texture(struct xcursor *xc, int w, int h, int xhot, int yhot, uint32_t *src) {
+static void xcursor_apply_image(struct xcursor *xc, int w, int h, int xhot, int yhot, uint32_t *src) {
 	struct server *s = xc->server;
 
-	if (w <= 0 || h <= 0 || w > XCURSOR_MAX || h > XCURSOR_MAX || src == NULL) {
-		xcursor_clear_texture(xc);
+	if (w <= 0 || h <= 0 || w > XCURSOR_MAX || h > XCURSOR_MAX || src == NULL)
 		return;
-	}
 
 	uint32_t *pixels = malloc((size_t)w * (size_t)h * 4);
 	if (pixels == NULL)
@@ -59,7 +43,6 @@ static void xcursor_update_texture(struct xcursor *xc, int w, int h, int xhot, i
 
 	if (!any_visible) {
 		free(pixels);
-		xcursor_clear_texture(xc);
 		dynscope_log_debug("dynscope: game cursor hidden (empty image)\n");
 		s->cursor_image_empty = true;
 		host_set_cursor_hidden(s->ds);
@@ -67,19 +50,6 @@ static void xcursor_update_texture(struct xcursor *xc, int w, int h, int xhot, i
 		return;
 	}
 
-	if (xc->tex_valid)
-		wlr_texture_destroy(xc->texture);
-	struct wlr_texture *tex = wlr_texture_from_pixels(s->renderer, DRM_FORMAT_ARGB8888, w * 4, w, h, pixels);
-	if (tex == NULL) {
-		free(pixels);
-		return;
-	}
-	xc->texture = tex;
-	xc->tex_w = w;
-	xc->tex_h = h;
-	xc->tex_hot_x = xhot;
-	xc->tex_hot_y = yhot;
-	xc->tex_valid = true;
 	s->cursor_image_empty = false;
 
 	double scale = host_get_scale(s->ds);
@@ -133,7 +103,6 @@ void xcursor_refresh(struct server *server) {
 
 	struct wlr_surface *focus = xwm_focus_surface(server);
 	if (focus == NULL || !focus->mapped) {
-		xcursor_clear_texture(xc);
 		host_set_cursor(server->ds, NULL, 0, 0, 0, 0);
 		return;
 	}
@@ -151,7 +120,6 @@ void xcursor_refresh(struct server *server) {
 	if (img->nbytes > 0) {
 		char *name = xcb_xfixes_get_cursor_image_and_name_name(img);
 		if (name != NULL && (strncmp(name, "X_cursor", img->nbytes) == 0 || strncmp(name, "root", img->nbytes) == 0 || strncmp(name, "left_ptr", img->nbytes) == 0 || strncmp(name, "default", img->nbytes) == 0)) {
-			xcursor_clear_texture(xc);
 			host_set_cursor(server->ds, NULL, 0, 0, 0, 0);
 			free(img);
 			return;
@@ -159,14 +127,13 @@ void xcursor_refresh(struct server *server) {
 	}
 
 	if (img->width == 16 && img->height == 16 && img->xhot == 8 && img->yhot == 8) {
-		xcursor_clear_texture(xc);
 		host_set_cursor(server->ds, NULL, 0, 0, 0, 0);
 		free(img);
 		return;
 	}
 
 	uint32_t *src = xcb_xfixes_get_cursor_image_and_name_cursor_image(img);
-	xcursor_update_texture(xc, (int)img->width, (int)img->height, (int)img->xhot, (int)img->yhot, src);
+	xcursor_apply_image(xc, (int)img->width, (int)img->height, (int)img->xhot, (int)img->yhot, src);
 	free(img);
 }
 
@@ -195,7 +162,6 @@ static void xcursor_disconnect(struct xcursor *xc) {
 		wl_event_source_remove(xc->fd_src);
 		xc->fd_src = NULL;
 	}
-	xcursor_clear_texture(xc);
 	if (xc->conn != NULL) {
 		xcb_disconnect(xc->conn);
 		xc->conn = NULL;

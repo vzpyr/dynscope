@@ -6,8 +6,6 @@
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_linux_drm_syncobj_v1.h>
 #include <wlr/types/wlr_seat.h>
-#include <wlr/types/wlr_subcompositor.h>
-#include <xcb/xcb.h>
 #include <wlr/xwayland/xwayland.h>
 
 #include "dynscope.h"

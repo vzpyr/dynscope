@@ -51,12 +51,6 @@ struct fit {
 };
 
 struct xcursor {
-	struct wlr_texture *texture;
-	int tex_w;
-	int tex_h;
-	int tex_hot_x;
-	int tex_hot_y;
-	bool tex_valid;
 	struct server *server;
 	xcb_connection_t *conn;
 	xcb_screen_t *screen;
@@ -107,12 +101,9 @@ struct server {
 	bool host_locked;
 	struct frame_pool pool;
 	struct fit fit;
-	int win_w;
-	int win_h;
 	struct wlr_surface *pointer_surface;
 	double pointer_x;
 	double pointer_y;
-	bool cursor_warned;
 };
 
 int server_init(struct dynscope *ds);
