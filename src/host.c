@@ -22,10 +22,9 @@
 #include "viewporter-client-protocol.h"
 #include "xdg-decoration-unstable-v1-client-protocol.h"
 
-#define MAX_OUTSTANDING 4
-
 struct outstanding {
 	int generation;
+	int frame_index;
 	struct wl_buffer *buffer;
 };
 
@@ -286,27 +285,19 @@ static const struct xdg_toplevel_listener toplevel_listener = {
 static void buffer_handle_release(void *data, struct wl_buffer *buffer) {
 	struct host *host = data;
 
-	struct outstanding *outstanding;
-	wl_array_for_each(outstanding, &host->outstanding) {
-		if (outstanding->buffer == buffer) {
-			server_frame_released(host->ds, outstanding->generation);
+	struct outstanding *entry;
+	wl_array_for_each(entry, &host->outstanding) {
+		if (entry->buffer == buffer) {
+			server_frame_released(host->ds, entry->frame_index, entry->generation);
+			struct outstanding *end = (struct outstanding *)((char *)host->outstanding.data + host->outstanding.size);
+			size_t remaining = (size_t)(end - (entry + 1));
+			if (remaining > 0)
+				memmove(entry, entry + 1, remaining * sizeof(*entry));
+			host->outstanding.size -= sizeof(*entry);
 			break;
 		}
 	}
 	wl_buffer_destroy(buffer);
-
-	struct outstanding kept[4];
-	size_t nkept = 0;
-	wl_array_for_each(outstanding, &host->outstanding) {
-		if (outstanding->buffer != buffer && nkept < MAX_OUTSTANDING)
-			kept[nkept++] = *outstanding;
-	}
-	wl_array_release(&host->outstanding);
-	wl_array_init(&host->outstanding);
-	for (size_t i = 0; i < nkept; i++) {
-		struct outstanding *entry = wl_array_add(&host->outstanding, sizeof(entry[i]));
-		*entry = kept[i];
-	}
 }
 
 static const struct wl_buffer_listener buffer_listener = {
@@ -350,6 +341,7 @@ static void host_present(struct host *host) {
 	struct outstanding *outstanding = wl_array_add(&host->outstanding, sizeof(*outstanding));
 	if (outstanding != NULL) {
 		outstanding->generation = info.generation;
+		outstanding->frame_index = info.frame_index;
 		outstanding->buffer = buffer;
 	} else {
 		wl_buffer_destroy(buffer);

@@ -4,6 +4,7 @@
 
 #include <wlr/render/pass.h>
 #include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_linux_drm_syncobj_v1.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_subcompositor.h>
 #include <xcb/xcb.h>
@@ -294,6 +295,7 @@ static void draw_surface_tree(struct wlr_render_pass *pass, struct wlr_surface *
 		int dw = (int)(w * scale + 0.5);
 		int dh = (int)(h * scale + 0.5);
 		if (dw > 0 && dh > 0) {
+			struct wlr_linux_drm_syncobj_surface_v1_state *sync_state = wlr_linux_drm_syncobj_v1_get_surface_state(surface);
 			struct wlr_render_texture_options options = {
 				.texture = texture,
 				.src_box = src,
@@ -303,6 +305,8 @@ static void draw_surface_tree(struct wlr_render_pass *pass, struct wlr_surface *
 					dw,
 					dh,
 				},
+				.wait_timeline = sync_state != NULL ? sync_state->acquire_timeline : NULL,
+				.wait_point = sync_state != NULL ? sync_state->acquire_point : 0,
 			};
 			wlr_render_pass_add_texture(pass, &options);
 		}

@@ -12,6 +12,7 @@
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_output.h>
+#include <wlr/types/wlr_linux_drm_syncobj_v1.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_pointer_constraints_v1.h>
 #include <wlr/types/wlr_relative_pointer_v1.h>
@@ -24,7 +25,7 @@
 struct dynscope;
 struct clipboard;
 
-#define FRAME_POOL_MAX 4
+#define FRAME_POOL_MAX 8
 
 struct frame {
 	struct wlr_buffer *buffer;
@@ -95,6 +96,7 @@ struct server {
 	struct clipboard *clipboard;
 	struct wlr_pointer_constraints_v1 *constraints;
 	struct wlr_relative_pointer_manager_v1 *relative_pointer;
+	struct wlr_linux_drm_syncobj_manager_v1 *syncobj;
 	struct wl_listener new_constraint;
 	struct wl_listener new_surface;
 	struct wl_list game_constraints;
@@ -118,7 +120,7 @@ void server_finish(struct dynscope *ds);
 const char *server_display_name(struct dynscope *ds);
 
 void server_present(struct dynscope *ds, int width, int height, struct frame_info *out);
-void server_frame_released(struct dynscope *ds, int generation);
+void server_frame_released(struct dynscope *ds, int frame_index, int generation);
 
 void server_pointer_enter(struct dynscope *ds, double host_x, double host_y);
 void server_pointer_motion(struct dynscope *ds, uint32_t time_msec, double host_x, double host_y);

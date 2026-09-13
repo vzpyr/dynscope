@@ -199,6 +199,7 @@ void server_present(struct dynscope *ds, int width, int height, struct frame_inf
 	frame->generation = ++s->pool.next_generation;
 
 	out->generation = frame->generation;
+	out->frame_index = (int)(frame - s->pool.frames);
 	out->fd = fcntl(frame->attrs.fd[0], F_DUPFD_CLOEXEC, 0);
 	out->format = frame->attrs.format;
 	out->width = width;
@@ -208,13 +209,19 @@ void server_present(struct dynscope *ds, int width, int height, struct frame_inf
 	out->modifier = frame->attrs.modifier;
 }
 
-void server_frame_released(struct dynscope *ds, int generation) {
+void server_frame_released(struct dynscope *ds, int frame_index, int generation) {
 	struct server *s = ds->server;
 	if (s == NULL)
 		return;
+	if (frame_index >= 0 && frame_index < s->pool.nframes) {
+		if (s->pool.frames[frame_index].generation == generation) {
+			s->pool.frames[frame_index].in_flight = false;
+			return;
+		}
+	}
 	for (int i = 0; i < s->pool.nframes; i++) {
 		if (s->pool.frames[i].generation == generation) {
-		s->pool.frames[i].in_flight = false;
+			s->pool.frames[i].in_flight = false;
 			return;
 		}
 	}
@@ -603,6 +610,11 @@ struct server_surface {
 static void handle_surface_commit(struct wl_listener *listener, void *data) {
 	struct server_surface *ss = wl_container_of(listener, ss, commit);
 	(void)data;
+	struct wlr_surface *surface = ss->wlr;
+	struct wlr_linux_drm_syncobj_surface_v1_state *sync_state = wlr_linux_drm_syncobj_v1_get_surface_state(surface);
+	if (sync_state != NULL && surface->buffer != NULL && surface->buffer->source != NULL &&
+			(surface->current.committed & WLR_SURFACE_STATE_BUFFER))
+		wlr_linux_drm_syncobj_v1_state_signal_release_with_buffer(sync_state, surface->buffer->source);
 	host_request_frame(ss->server->ds);
 }
 
@@ -729,6 +741,10 @@ int server_init(struct dynscope *ds) {
 		fprintf(stderr, "dynscope: failed to initialize buffer protocols\n");
 		goto fail;
 	}
+
+	int drm_fd = wlr_renderer_get_drm_fd(s->renderer);
+	if (drm_fd >= 0 && s->renderer->features.timeline)
+		s->syncobj = wlr_linux_drm_syncobj_manager_v1_create(s->display, 1, drm_fd);
 
 	s->compositor = wlr_compositor_create(s->display, 6, s->renderer);
 	if (s->compositor == NULL) {

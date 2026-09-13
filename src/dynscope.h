@@ -30,6 +30,7 @@ struct server;
 
 struct frame_info {
 	int generation;
+	int frame_index;
 	int fd;
 	uint32_t format;
 	int32_t width;
