@@ -1,62 +1,64 @@
 # dynscope
 
-Lightweight nested gaming scope compositor. Gamescope's behavior, minimal surface.
+Lightweight nested Wayland and XWayland gaming scope compositor
 
-`dynscope -- %command%` in Steam launch options (or any launcher) runs the game
-on an internal virtual screen and presents it inside a normal, freely resizable
-window in your Wayland session:
+## Features
 
-- internal game resolution switches live, no restart
-- uniform-scale letterboxing, never stretched, black bars handled for you
-- gamescope-identical cursor behavior: no heuristics, driven purely by
-  pointer-constraints protocol state from Xwayland
-  (game hides cursor + grabs pointer → camera lock with raw relative motion;
-  menus → cursor glides back out of the window)
-- clipboard and primary selection bridged both directions
-- no flags, no FSR, no winit, no SDL
+- Isolated nested session with rootless XWayland integration
+- Dynamic aspect ratio fitting and centering without distorted stretching
+- Zero-copy DMA-BUF pipeline with frame pacing and explicit sync for near-zero compositor overhead
+- Automatic pointer lock, confinement, and raw relative motion for FPS and camera controls
+- Dynamic host display mode forwarding to Wine/Proton and X11 games
+- Seamless live resolution switching without restarting the game
+- Transparent cursor passthrough with hardware-scaled cursor images
+- Bidirectional clipboard and primary selection bridging
+- Tames stubborn fullscreen or fixed-size games into freely resizable windows
+
+## Why not Gamescope?
+
+- Minimal dependency footprint and a tiny, clean C codebase
+- No fixed internal resolution: Gamescope's `-w`/`-h` flags are replaced by dynamic fitting to the game's actual resolution
+- No fixed window size: Gamescope's `-W`/`-H` flags are replaced by allowing free window resizing through your desktop environment
+- Zero configuration: no flags, no wrappers, no SDL, and no winit
+
+## Requirements
+
+- A Wayland compositor with `linux-dmabuf-v1` support
+- XWayland
+- Hardware-accelerated GPU driver with GLES2 and GBM support
 
 ## Usage
 
-```
+```sh
 dynscope -- COMMAND [ARG...]
 ```
 
 ### Steam Launch Options
 
-Right-click a game in your Steam Library, select Properties, and enter the following into Launch Options:
+Right-click a game in your Steam Library, select Properties, and set Launch Options:
 
-```
-/path/to/dynscope -- %command%
-```
-
-Or if dynscope is installed in your system PATH:
-
-```
+```sh
 dynscope -- %command%
 ```
 
-The window can be resized freely at any time; the game keeps its own
-resolution and is letterboxed into the window. Closing the window
-terminates the game. dynscope exits with the game's exact exit code
-or signal status.
+## Building from Source
 
-Requirements: a Wayland compositor, Xwayland (bundled logic via wlroots),
-wlroots 0.20, meson, ninja.
+Build dependencies:
 
-## Build
+- A C11 compiler (GCC or Clang)
+- Meson (>= 0.60.0) and Ninja
+- `pkg-config`
+- `wayland-client` and `wayland-server` (>= 1.22.0)
+- `wayland-protocols`
+- `xkbcommon`
+- `xcb`, `xcb-xfixes`, and `pixman-1`
+- `glesv2`
+- `wlroots` (>= 0.20, bundled via Meson wrap if not installed on system)
 
-```
+```sh
 meson setup build
 ninja -C build
 ```
-
-## Debugging
-
-Set `DYNSCOPE_DEBUG=1` for verbose diagnostic logging.
-
-## Status
-
-Phase-based roadmap: see [ROADMAP.md](ROADMAP.md).
 
 ## License
 
