@@ -1,25 +1,25 @@
 # dynscope
 
-Lightweight nested Wayland and XWayland gaming scope compositor
+Lightweight nested Wayland gaming scope
 
 ## Features
 
-- Isolated nested session with rootless XWayland integration
-- Dynamic aspect ratio fitting and centering without distorted stretching
-- Zero-copy DMA-BUF pipeline with frame pacing and explicit sync for near-zero compositor overhead
-- Automatic pointer lock, confinement, and raw relative motion for FPS and camera controls
-- Dynamic host display mode forwarding to Wine/Proton and X11 games
-- Seamless live resolution switching without restarting the game
-- Transparent cursor passthrough with hardware-scaled cursor images
-- Bidirectional clipboard and primary selection bridging
-- Tames stubborn fullscreen or fixed-size games into freely resizable windows
+- Isolated nested session with rootless XWayland
+- Dynamic aspect ratio fitting and centering
+- Zero-copy DMA-BUF pipeline with explicit sync and frame pacing
+- Automatic pointer locking, confinement, and relative motion
+- Host display mode forwarding to Wine, Proton, and X11 games
+- Live resolution switching without game restarts
+- Cursor passthrough with HiDPI and fractional scale support
+- Bidirectional clipboard and primary selection synchronization
+- Constrains stubborn fullscreen games into freely resizable windows
 
 ## Why not Gamescope?
 
-- Minimal dependency footprint and a tiny, clean C codebase
-- No fixed internal resolution: Gamescope's `-w`/`-h` flags are replaced by dynamic fitting to the game's actual resolution
-- No fixed window size: Gamescope's `-W`/`-H` flags are replaced by allowing free window resizing through your desktop environment
-- Zero configuration: no flags, no wrappers, no SDL, and no winit
+- Minimal C codebase with a lightweight dependency footprint
+- Dynamic canvas: automatically fits the game resolution instead of requiring fixed `-w` and `-h` flags
+- Native window sizing: resize freely through your window manager instead of setting static `-W` and `-H` dimensions
+- Zero configuration: no flags, no wrappers, and no SDL
 
 ## Requirements
 
@@ -28,25 +28,25 @@ Lightweight nested Wayland and XWayland gaming scope compositor
 
 ## Usage
 
+> Set the game to **windowed mode** in its in-game video settings. dynscope scales and centers the canvas inside a freely resizable Wayland window.
+
 ```sh
 dynscope -- COMMAND [ARG...]
 ```
 
-### Steam Launch Options
+### Steam
 
-Right-click a game in your Steam Library, select Properties, and set Launch Options:
+Set the game's launch options in Steam:
 
 ```sh
 dynscope -- %command%
 ```
 
-Make sure to set the game to **windowed mode** in its in-game video settings. dynscope presents and centers the game canvas with uniform scaling inside a normal, freely resizable Wayland window.
-
-## Building from Source
+## Building
 
 Dependencies:
 
-- A C11 compiler (GCC or Clang)
+- C11 compiler (GCC or Clang)
 - Meson (>= 0.60.0), Ninja, and `pkg-config`
 - `wayland-client`, `wayland-server` (>= 1.22.0), and `wayland-protocols`
 - `xkbcommon`, `pixman-1`, `xcb`, and `xcb-xfixes`
