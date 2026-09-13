@@ -1,6 +1,6 @@
 # dynscope
 
-Lightweight nested Wayland gaming scope
+Lightweight nested Wayland compositor for games
 
 ## Features
 
@@ -31,7 +31,7 @@ Lightweight nested Wayland gaming scope
 > Set the game to **windowed mode** in its in-game video settings. dynscope scales and centers the canvas inside a freely resizable Wayland window.
 
 ```sh
-dynscope -- COMMAND [ARG...]
+dynscope -- <command> [args...]
 ```
 
 ### Steam
