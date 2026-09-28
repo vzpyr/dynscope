@@ -232,7 +232,7 @@ void server_pointer_enter(struct dynscope *ds, double host_x, double host_y) {
 	double x, y;
 	xwm_pick_surface(s, host_x, host_y, &surface, &x, &y);
 	dynscope_log_debug("dynscope: server pointer enter host=(%.0f,%.0f) surface=%p res=%u game=(%.1f,%.1f)\n", host_x, host_y, (void *)surface, surface != NULL && surface->resource != NULL ? wl_resource_get_id(surface->resource) : 0, x, y);
-	if (surface == NULL)
+	if (surface == NULL || !surface->mapped)
 		return;
 	s->pointer_surface = surface;
 	s->pointer_x = x;
@@ -250,10 +250,12 @@ void server_pointer_motion(struct dynscope *ds, uint32_t time_msec, double host_
 	struct wlr_surface *surface = NULL;
 	double x, y;
 	xwm_pick_surface(s, host_x, host_y, &surface, &x, &y);
+	if (surface != NULL && !surface->mapped)
+		surface = NULL;
 	s->pointer_x = x;
 	s->pointer_y = y;
 	if (surface == s->pointer_surface) {
-		if (surface != NULL) {
+		if (surface != NULL && surface->mapped) {
 			wlr_seat_pointer_notify_motion(s->seat, time_msec, x, y);
 			wlr_seat_pointer_notify_frame(s->seat);
 		}
@@ -617,6 +619,10 @@ static void handle_surface_commit(struct wl_listener *listener, void *data) {
 static void handle_surface_destroy(struct wl_listener *listener, void *data) {
 	struct server_surface *ss = wl_container_of(listener, ss, destroy);
 	(void)data;
+	if (ss->server->pointer_surface == ss->wlr) {
+		ss->server->pointer_surface = NULL;
+		wlr_seat_pointer_notify_clear_focus(ss->server->seat);
+	}
 	wl_list_remove(&ss->commit.link);
 	wl_list_remove(&ss->destroy.link);
 	free(ss);

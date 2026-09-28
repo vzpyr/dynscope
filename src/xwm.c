@@ -40,7 +40,7 @@ struct xwm {
 };
 
 static void keyboard_focus(struct xwm *xwm, struct wlr_xwayland_surface *xs) {
-	if (xs == NULL || xs->surface == NULL)
+	if (xs == NULL || xs->surface == NULL || !xs->surface->mapped)
 		return;
 	struct wlr_keyboard *keyboard = &xwm->server->keyboard;
 	wlr_xwayland_surface_activate(xs, true);
@@ -71,16 +71,7 @@ static struct wlr_xwayland_surface *pick_focus(struct xwm *xwm) {
 			best_seq = win->sequence;
 		}
 	}
-	if (best != NULL)
-		return best;
-
-	wl_list_for_each_reverse(win, &xwm->windows, link) {
-		struct wlr_xwayland_surface *xs = win->xs;
-		if (xs->override_redirect || xs->surface == NULL)
-			continue;
-		return xs;
-	}
-	return NULL;
+	return best;
 }
 
 static struct wlr_xwayland_surface *xwm_focus_window(struct xwm *xwm) {
@@ -111,6 +102,10 @@ static void handle_destroy(struct wl_listener *listener, void *data) {
 
 	dynscope_log_debug("dynscope: window %p destroyed\n", (void *)win->xs);
 
+	if (xwm->focus == win->xs) {
+		xwm->focus = NULL;
+	}
+
 	wl_list_remove(&win->destroy.link);
 	wl_list_remove(&win->map_request.link);
 	wl_list_remove(&win->associate.link);
@@ -121,12 +116,13 @@ static void handle_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&win->link);
 	free(win);
 
-	if (xwm->focus == xs) {
-		xwm->focus = pick_focus(xwm);
-		if (xwm->focus != NULL)
-			claim_focus(xwm, xwm->focus);
-		else
-			server_constrain_focused(xwm->server);
+	xwm->focus = pick_focus(xwm);
+	if (xwm->focus != NULL) {
+		claim_focus(xwm, xwm->focus);
+	} else {
+		host_set_title(xwm->server->ds, "dynscope");
+		wlr_seat_keyboard_notify_clear_focus(xwm->server->seat);
+		server_constrain_focused(xwm->server);
 	}
 
 	if (xwm->closing) {
@@ -202,11 +198,15 @@ static void handle_dissociate(struct wl_listener *listener, void *data) {
 
 	dynscope_log_debug("dynscope: window %p dissociate\n", (void *)win->xs);
 	if (xwm->focus == win->xs) {
-		xwm->focus = pick_focus(xwm);
-		if (xwm->focus != NULL)
-			claim_focus(xwm, xwm->focus);
-		else
+		xwm->focus = NULL;
+		struct wlr_xwayland_surface *next = pick_focus(xwm);
+		if (next != NULL && next != win->xs) {
+			claim_focus(xwm, next);
+		} else {
+			host_set_title(xwm->server->ds, "dynscope");
+			wlr_seat_keyboard_notify_clear_focus(xwm->server->seat);
 			server_constrain_focused(xwm->server);
+		}
 	}
 }
 
@@ -373,12 +373,12 @@ void xwm_game_size(struct server *server, int *width, int *height) {
 
 void xwm_surface_activate(struct server *server, struct wlr_surface *surface) {
 	struct xwm *xwm = server->xwm;
-	if (xwm == NULL || surface == NULL)
+	if (xwm == NULL || surface == NULL || !surface->mapped)
 		return;
 
 	struct wlr_surface *root_surface = wlr_surface_get_root_surface(surface);
 	struct wlr_xwayland_surface *xs = wlr_xwayland_surface_try_from_wlr_surface(root_surface != NULL ? root_surface : surface);
-	if (xs == NULL || xs->override_redirect)
+	if (xs == NULL || xs->override_redirect || xs->surface == NULL || !xs->surface->mapped)
 		return;
 
 	struct xwindow *win = xwindow_find(xwm, xs);
