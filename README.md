@@ -54,4 +54,4 @@ meson install -C build --skip-subprojects
 
 ## License
 
-[MIT][LICENSE]
+[MIT](LICENSE)
