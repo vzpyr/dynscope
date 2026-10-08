@@ -1,7 +1,7 @@
 project(
   'dynscope',
   'c',
-  version: '0.1.0',
+  version: '0.1.1',
   meson_version: '>=0.60.0',
   default_options: [
     'c_std=c11',

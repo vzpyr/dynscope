@@ -1,5 +1,5 @@
 build/
-subprojects/wlroots/
-subprojects/libliftoff/
 subprojects/.wraplock
 subprojects/libliftoff.wrap
+subprojects/libliftoff/
+subprojects/wlroots/
