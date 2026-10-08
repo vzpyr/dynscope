@@ -25,7 +25,7 @@ Lightweight nested Wayland compositor for games
 
 You need to set your game to windowed mode in its video settings for fitting to work reliably.
 
-```sh
+```bash
 dynscope -- COMMAND [ARG...]
 ```
 
@@ -33,7 +33,7 @@ dynscope -- COMMAND [ARG...]
 
 Set this in your game launch options in Steam:
 
-```sh
+```bash
 dynscope -- %command%
 ```
 
@@ -41,14 +41,14 @@ dynscope -- %command%
 
 You need these packages: `meson ninja git wayland-scanner glesv2 pixman-1 wayland-client wayland-protocols wayland-server xcb xcb-xfixe xkbcommon`
 
-```sh
+```bash
 meson setup build --prefix ~/.local
 ninja -C build
 ```
 
 Install with:
 
-```sh
+```bash
 meson install -C build --skip-subprojects
 ```
 
