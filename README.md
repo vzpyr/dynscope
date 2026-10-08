@@ -21,6 +21,14 @@ Lightweight nested Wayland compositor for games
 - Dynamic canvas: automatically fits the game resolution instead of requiring `-w` and `-h` flags
 - Native window sizing: resize freely through your window manager instead of setting static `-W` and `-H` dimensions
 
+## Installation
+
+You can install the latest release using this command:
+
+```bash
+curl -sL https://github.com/vzpyr/dynscope/releases/latest/download/dynscope-linux-x86_64.tar.gz | tar -xz -C ~/.local/bin dynscope
+```
+
 ## Usage
 
 You need to set your game to windowed mode in its video settings for fitting to work reliably.
@@ -37,7 +45,7 @@ Set this in your game launch options in Steam:
 dynscope -- %command%
 ```
 
-## Building
+## Build
 
 You need these packages: `meson ninja git wayland-scanner glesv2 pixman-1 wayland-client wayland-protocols wayland-server xcb xcb-xfixe xkbcommon`
 
