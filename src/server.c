@@ -516,13 +516,18 @@ void server_keyboard_focus(struct dynscope *ds, bool focused) {
 void server_update_lock(struct server *s) {
   if (s == NULL)
     return;
-  bool relative = false;
-  if (s->active_constraint != NULL) {
-    if (s->active_constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED)
-      relative = true;
-    else if (s->cursor_image_empty)
-      relative = true;
-  }
+  /*
+   * A game that hides its cursor while capturing the mouse expects
+   * relative motion, but the client side pointer constraint is not
+   * reliable: Xwayland drops it as soon as the cursor image changes
+   * and only recreates it on the next grab. Treat a hidden game cursor
+   * as a lock request on its own so the host pointer stays captured
+   * while the game is playing.
+   */
+  bool relative = s->cursor_image_empty;
+  if (s->active_constraint != NULL &&
+      s->active_constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED)
+    relative = true;
   if (relative == s->host_locked)
     return;
   s->host_locked = relative;

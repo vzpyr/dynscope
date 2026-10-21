@@ -63,6 +63,7 @@ static void xcursor_apply_image(struct xcursor *xc, int w, int h, int xhot,
   if (out_w > 256 || out_h > 256) {
     free(pixels);
     host_set_cursor(s->ds, NULL, 0, 0, 0, 0);
+    server_update_lock(s);
     return;
   }
 
@@ -98,6 +99,12 @@ static void xcursor_apply_image(struct xcursor *xc, int w, int h, int xhot,
                      w, h, xhot, yhot, scale);
 }
 
+static void xcursor_use_default_cursor(struct server *server) {
+  server->cursor_image_empty = false;
+  host_set_cursor(server->ds, NULL, 0, 0, 0, 0);
+  server_update_lock(server);
+}
+
 void xcursor_refresh(struct server *server) {
   struct xcursor *xc = server->xcursor;
   if (xc == NULL || xc->conn == NULL)
@@ -105,7 +112,7 @@ void xcursor_refresh(struct server *server) {
 
   struct wlr_surface *focus = xwm_focus_surface(server);
   if (focus == NULL || !focus->mapped) {
-    host_set_cursor(server->ds, NULL, 0, 0, 0, 0);
+    xcursor_use_default_cursor(server);
     return;
   }
 
@@ -127,7 +134,7 @@ void xcursor_refresh(struct server *server) {
                          strncmp(name, "root", img->nbytes) == 0 ||
                          strncmp(name, "left_ptr", img->nbytes) == 0 ||
                          strncmp(name, "default", img->nbytes) == 0)) {
-      host_set_cursor(server->ds, NULL, 0, 0, 0, 0);
+      xcursor_use_default_cursor(server);
       free(img);
       return;
     }
@@ -135,7 +142,7 @@ void xcursor_refresh(struct server *server) {
 
   if (img->width == 16 && img->height == 16 && img->xhot == 8 &&
       img->yhot == 8) {
-    host_set_cursor(server->ds, NULL, 0, 0, 0, 0);
+    xcursor_use_default_cursor(server);
     free(img);
     return;
   }
