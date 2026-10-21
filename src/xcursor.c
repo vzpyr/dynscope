@@ -188,7 +188,7 @@ int xcursor_init(struct server *server) {
                      server->xwayland->display_name);
   xc->conn = xcb_connect(server->xwayland->display_name, NULL);
   if (xcb_connection_has_error(xc->conn)) {
-    fprintf(stderr,
+    dynscope_log_printf(
             "dynscope: failed to connect to Xwayland for cursor tracking\n");
     xcursor_disconnect(xc);
     return -1;
@@ -196,7 +196,7 @@ int xcursor_init(struct server *server) {
 
   xc->screen = xcb_setup_roots_iterator(xcb_get_setup(xc->conn)).data;
   if (xc->screen == NULL) {
-    fprintf(stderr, "dynscope: failed to get X screen for cursor tracking\n");
+    dynscope_log_printf("dynscope: failed to get X screen for cursor tracking\n");
     xcursor_disconnect(xc);
     return -1;
   }
@@ -204,7 +204,7 @@ int xcursor_init(struct server *server) {
   const xcb_query_extension_reply_t *ext =
       xcb_get_extension_data(xc->conn, &xcb_xfixes_id);
   if (ext == NULL || !ext->present) {
-    fprintf(stderr, "dynscope: XFixes not available on Xwayland, cursor "
+    dynscope_log_printf("dynscope: XFixes not available on Xwayland, cursor "
                     "passthrough disabled\n");
     xcursor_disconnect(xc);
     return -1;
@@ -225,7 +225,7 @@ int xcursor_init(struct server *server) {
                     xc->conn, xc->screen->root,
                     XCB_XFIXES_CURSOR_NOTIFY_MASK_DISPLAY_CURSOR));
   if (err != NULL) {
-    fprintf(stderr, "dynscope: select cursor input failed: %u\n",
+    dynscope_log_printf("dynscope: select cursor input failed: %u\n",
             err->error_code);
     free(err);
   }
@@ -236,7 +236,7 @@ int xcursor_init(struct server *server) {
   xc->fd_src = wl_event_loop_add_fd(server->ds->loop, fd, WL_EVENT_READABLE,
                                     xcursor_fd_event, xc);
   if (xc->fd_src == NULL) {
-    fprintf(stderr, "dynscope: failed to watch Xwayland cursor connection\n");
+    dynscope_log_printf("dynscope: failed to watch Xwayland cursor connection\n");
     xcursor_disconnect(xc);
     return -1;
   }

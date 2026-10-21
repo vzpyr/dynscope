@@ -1255,7 +1255,7 @@ static void data_source_handle_send(void *data, struct wl_data_source *source,
   (void)mime_type;
   if (host->clip_data == NULL ||
       write(fd, host->clip_data, host->clip_len) != (ssize_t)host->clip_len)
-    fprintf(stderr, "dynscope: failed to write clipboard data\n");
+    dynscope_log_printf("dynscope: failed to write clipboard data\n");
   close(fd);
 }
 
@@ -1307,7 +1307,7 @@ primary_source_handle_send(void *data,
   if (host->primary_data == NULL ||
       write(fd, host->primary_data, host->primary_len) !=
           (ssize_t)host->primary_len)
-    fprintf(stderr, "dynscope: failed to write primary selection data\n");
+    dynscope_log_printf("dynscope: failed to write primary selection data\n");
   close(fd);
 }
 
@@ -1524,13 +1524,13 @@ static int host_fd_event(int fd, uint32_t mask, void *data) {
   struct host *host = data;
 
   if ((mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)) != 0) {
-    fprintf(stderr, "dynscope: host compositor connection lost\n");
+    dynscope_log_printf("dynscope: host compositor connection lost\n");
     dynscope_close(host->ds);
     return 0;
   }
   if ((mask & WL_EVENT_READABLE) != 0) {
     if (wl_display_dispatch(host->display) < 0) {
-      fprintf(stderr, "dynscope: host compositor connection error: %s\n",
+      dynscope_log_printf("dynscope: host compositor connection error: %s\n",
               strerror(errno));
       dynscope_close(host->ds);
       return 0;
@@ -1569,7 +1569,7 @@ void host_flush(struct dynscope *ds) {
 int host_open(struct dynscope *ds) {
   struct host *host = calloc(1, sizeof(*host));
   if (host == NULL) {
-    fprintf(stderr, "dynscope: out of memory\n");
+    dynscope_log_printf("dynscope: out of memory\n");
     return -1;
   }
   host->ds = ds;
@@ -1578,7 +1578,7 @@ int host_open(struct dynscope *ds) {
 
   host->display = wl_display_connect(NULL);
   if (host->display == NULL) {
-    fprintf(stderr, "dynscope: failed to connect to host Wayland compositor\n");
+    dynscope_log_printf("dynscope: failed to connect to host Wayland compositor\n");
     goto fail;
   }
 
@@ -1588,7 +1588,7 @@ int host_open(struct dynscope *ds) {
 
   if (host->compositor == NULL || host->wm_base == NULL || host->seat == NULL ||
       host->dmabuf == NULL || host->shm == NULL) {
-    fprintf(stderr,
+    dynscope_log_printf(
             "dynscope: host compositor is missing required Wayland globals "
             "(compositor, shm, seat, xdg_wm_base, linux-dmabuf)\n");
     goto fail;
@@ -1645,7 +1645,7 @@ int host_open(struct dynscope *ds) {
       wl_event_loop_add_fd(ds->loop, wl_display_get_fd(host->display),
                            WL_EVENT_READABLE, host_fd_event, host);
   if (host->fd_src == NULL) {
-    fprintf(stderr, "dynscope: failed to watch host compositor connection\n");
+    dynscope_log_printf("dynscope: failed to watch host compositor connection\n");
     goto fail;
   }
 

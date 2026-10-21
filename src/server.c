@@ -654,7 +654,7 @@ static void handle_xwayland_destroy(struct wl_listener *listener, void *data) {
   (void)listener;
   (void)data;
   struct server *s = wl_container_of(listener, s, xwayland_destroy);
-  fprintf(stderr, "dynscope: Xwayland exited\n");
+  dynscope_log_printf("dynscope: Xwayland exited\n");
   dynscope_close(s->ds);
 }
 
@@ -734,10 +734,18 @@ static void handle_output_bind(struct wl_listener *listener, void *data) {
     wl_output_send_done(event->resource);
 }
 
+static void server_log_wlr(enum wlr_log_importance importance, const char *fmt,
+                           va_list args) {
+  if (importance > wlr_log_get_verbosity())
+    return;
+  dynscope_log_vprintf(fmt, args);
+  dynscope_log_printf("\n");
+}
+
 int server_init(struct dynscope *ds) {
   struct server *s = calloc(1, sizeof(*s));
   if (s == NULL) {
-    fprintf(stderr, "dynscope: out of memory\n");
+    dynscope_log_printf("dynscope: out of memory\n");
     return -1;
   }
   s->ds = ds;
@@ -745,29 +753,29 @@ int server_init(struct dynscope *ds) {
 
   enum wlr_log_importance log_importance =
       dynscope_debug_enabled() ? WLR_DEBUG : WLR_ERROR;
-  wlr_log_init(log_importance, NULL);
+  wlr_log_init(log_importance, server_log_wlr);
 
   s->display = wl_display_create();
   if (s->display == NULL) {
-    fprintf(stderr, "dynscope: failed to create Wayland display\n");
+    dynscope_log_printf("dynscope: failed to create Wayland display\n");
     goto fail;
   }
   ds->loop = wl_display_get_event_loop(s->display);
 
   s->xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
   if (s->xkb_context == NULL) {
-    fprintf(stderr, "dynscope: failed to create xkb context\n");
+    dynscope_log_printf("dynscope: failed to create xkb context\n");
     goto fail;
   }
   struct xkb_keymap *keymap = xkb_keymap_new_from_names(
       s->xkb_context, NULL, XKB_KEYMAP_COMPILE_NO_FLAGS);
   if (keymap == NULL) {
-    fprintf(stderr, "dynscope: failed to create default keymap\n");
+    dynscope_log_printf("dynscope: failed to create default keymap\n");
     goto fail;
   }
   wlr_keyboard_init(&s->keyboard, &keyboard_impl, "dynscope");
   if (!wlr_keyboard_set_keymap(&s->keyboard, keymap)) {
-    fprintf(stderr, "dynscope: failed to set default keymap\n");
+    dynscope_log_printf("dynscope: failed to set default keymap\n");
     xkb_keymap_unref(keymap);
     goto fail;
   }
@@ -775,35 +783,35 @@ int server_init(struct dynscope *ds) {
 
   s->backend = wlr_headless_backend_create(ds->loop);
   if (s->backend == NULL) {
-    fprintf(stderr, "dynscope: failed to create headless backend\n");
+    dynscope_log_printf("dynscope: failed to create headless backend\n");
     goto fail;
   }
 
   s->renderer = wlr_renderer_autocreate(s->backend);
   if (s->renderer == NULL) {
-    fprintf(stderr, "dynscope: failed to create renderer\n");
+    dynscope_log_printf("dynscope: failed to create renderer\n");
     goto fail;
   }
   if (!wlr_renderer_is_gles2(s->renderer)) {
-    fprintf(stderr, "dynscope: GPU renderer (GLES2) is required, falling back "
+    dynscope_log_printf("dynscope: GPU renderer (GLES2) is required, falling back "
                     "to software is not supported\n");
     goto fail;
   }
   s->egl = wlr_gles2_renderer_get_egl(s->renderer);
 
   if (!wlr_backend_start(s->backend)) {
-    fprintf(stderr, "dynscope: failed to start backend\n");
+    dynscope_log_printf("dynscope: failed to start backend\n");
     goto fail;
   }
 
   s->allocator = wlr_allocator_autocreate(s->backend, s->renderer);
   if (s->allocator == NULL) {
-    fprintf(stderr, "dynscope: failed to create allocator\n");
+    dynscope_log_printf("dynscope: failed to create allocator\n");
     goto fail;
   }
 
   if (!wlr_renderer_init_wl_display(s->renderer, s->display)) {
-    fprintf(stderr, "dynscope: failed to initialize buffer protocols\n");
+    dynscope_log_printf("dynscope: failed to initialize buffer protocols\n");
     goto fail;
   }
 
@@ -813,20 +821,20 @@ int server_init(struct dynscope *ds) {
 
   s->compositor = wlr_compositor_create(s->display, 6, s->renderer);
   if (s->compositor == NULL) {
-    fprintf(stderr, "dynscope: failed to create compositor\n");
+    dynscope_log_printf("dynscope: failed to create compositor\n");
     goto fail;
   }
   s->new_surface.notify = handle_new_surface;
   wl_signal_add(&s->compositor->events.new_surface, &s->new_surface);
   s->subcompositor = wlr_subcompositor_create(s->display);
   if (wlr_viewporter_create(s->display) == NULL) {
-    fprintf(stderr, "dynscope: failed to create viewporter\n");
+    dynscope_log_printf("dynscope: failed to create viewporter\n");
     goto fail;
   }
 
   s->seat = wlr_seat_create(s->display, "seat0");
   if (s->seat == NULL) {
-    fprintf(stderr, "dynscope: failed to create seat\n");
+    dynscope_log_printf("dynscope: failed to create seat\n");
     goto fail;
   }
   wlr_seat_set_capabilities(s->seat, WL_SEAT_CAPABILITY_POINTER |
@@ -835,13 +843,13 @@ int server_init(struct dynscope *ds) {
 
   s->data_device = wlr_data_device_manager_create(s->display);
   if (wlr_primary_selection_v1_device_manager_create(s->display) == NULL) {
-    fprintf(stderr, "dynscope: failed to create primary selection manager\n");
+    dynscope_log_printf("dynscope: failed to create primary selection manager\n");
     goto fail;
   }
 
   s->constraints = wlr_pointer_constraints_v1_create(s->display);
   if (s->constraints == NULL) {
-    fprintf(stderr, "dynscope: failed to create pointer constraints manager\n");
+    dynscope_log_printf("dynscope: failed to create pointer constraints manager\n");
     goto fail;
   }
   s->new_constraint.notify = handle_new_constraint;
@@ -851,7 +859,7 @@ int server_init(struct dynscope *ds) {
 
   s->relative_pointer = wlr_relative_pointer_manager_v1_create(s->display);
   if (s->relative_pointer == NULL) {
-    fprintf(stderr, "dynscope: failed to create relative pointer manager\n");
+    dynscope_log_printf("dynscope: failed to create relative pointer manager\n");
     goto fail;
   }
 
@@ -862,7 +870,7 @@ int server_init(struct dynscope *ds) {
   s->output =
       wlr_headless_add_output(s->backend, initial_width, initial_height);
   if (s->output == NULL) {
-    fprintf(stderr, "dynscope: failed to create virtual output\n");
+    dynscope_log_printf("dynscope: failed to create virtual output\n");
     goto fail;
   }
   wlr_output_set_name(s->output, "dynscope");
@@ -873,7 +881,7 @@ int server_init(struct dynscope *ds) {
                                    initial_refresh);
   if (!wlr_output_commit_state(s->output, &output_state)) {
     wlr_output_state_finish(&output_state);
-    fprintf(stderr, "dynscope: failed to commit virtual output\n");
+    dynscope_log_printf("dynscope: failed to commit virtual output\n");
     goto fail;
   }
   wlr_output_state_finish(&output_state);
@@ -883,14 +891,14 @@ int server_init(struct dynscope *ds) {
 
   s->layout = wlr_output_layout_create(s->display);
   if (s->layout == NULL) {
-    fprintf(stderr, "dynscope: failed to create output layout\n");
+    dynscope_log_printf("dynscope: failed to create output layout\n");
     goto fail;
   }
   wlr_output_layout_add(s->layout, s->output, 0, 0);
 
   s->xwayland = wlr_xwayland_create(s->display, s->compositor, false);
   if (s->xwayland == NULL) {
-    fprintf(stderr, "dynscope: failed to start Xwayland\n");
+    dynscope_log_printf("dynscope: failed to start Xwayland\n");
     goto fail;
   }
   s->xwayland_destroy.notify = handle_xwayland_destroy;

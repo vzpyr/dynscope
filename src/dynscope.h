@@ -1,6 +1,7 @@
 #ifndef DYNSCOPE_H
 #define DYNSCOPE_H
 
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -57,6 +58,11 @@ struct dynscope {
 
 void dynscope_close(struct dynscope *ds);
 
+void dynscope_log_open(void);
+void dynscope_log_close(void);
+void dynscope_log_vprintf(const char *fmt, va_list args);
+void dynscope_log_printf(const char *fmt, ...);
+
 static inline bool dynscope_debug_enabled(void) {
   static int enabled = -1;
   if (enabled < 0) {
@@ -70,7 +76,7 @@ static inline bool dynscope_debug_enabled(void) {
 #define dynscope_log_debug(...)                                                \
   do {                                                                         \
     if (dynscope_debug_enabled())                                              \
-      fprintf(stderr, __VA_ARGS__);                                            \
+      dynscope_log_printf(__VA_ARGS__);                                        \
   } while (0)
 
 #endif

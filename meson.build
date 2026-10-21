@@ -75,6 +75,7 @@ executable(
   'src/main.c',
   'src/child.c',
   'src/host.c',
+  'src/log.c',
   'src/server.c',
   'src/xwm.c',
   'src/xcursor.c',

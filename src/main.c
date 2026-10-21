@@ -25,11 +25,13 @@ void dynscope_close(struct dynscope *ds) {
 
 int main(int argc, char **argv) {
   if (argc < 3 || strcmp(argv[1], "--") != 0) {
-    fprintf(stderr, "usage: dynscope -- COMMAND [ARG...]\n");
+    dynscope_log_printf("usage: dynscope -- COMMAND [ARG...]\n");
     return 64;
   }
 
   signal(SIGPIPE, SIG_IGN);
+
+  dynscope_log_open();
 
   struct dynscope ds = {
       .exit_code = 1,
@@ -52,7 +54,7 @@ int main(int argc, char **argv) {
   wl_event_loop_add_signal(ds.loop, SIGTERM, handle_signal, &ds);
 
   if (child_spawn(&ds, &argv[2]) < 0) {
-    fprintf(stderr, "dynscope: failed to spawn child process\n");
+    dynscope_log_printf("dynscope: failed to spawn child process\n");
     host_close(&ds);
     server_finish(&ds);
     return 1;
@@ -66,5 +68,6 @@ int main(int argc, char **argv) {
 
   host_close(&ds);
   server_finish(&ds);
+  dynscope_log_close();
   return ds.exit_code;
 }

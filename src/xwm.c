@@ -523,7 +523,7 @@ void xwm_pick_surface(struct server *server, double host_x, double host_y,
 int xwm_init(struct server *server) {
   struct xwm *xwm = calloc(1, sizeof(*xwm));
   if (xwm == NULL) {
-    fprintf(stderr, "dynscope: out of memory\n");
+    dynscope_log_printf("dynscope: out of memory\n");
     return -1;
   }
   xwm->server = server;
